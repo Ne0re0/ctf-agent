@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -60,6 +61,45 @@ def discover_claude_models(command: str) -> tuple[list[str], list[str]]:
             return aliases, efforts
 
     raise RuntimeError("Claude CLI did not advertise any model aliases")
+
+
+def discover_claude_versioned_models(
+    config_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return full model versions from Claude Code's local model catalog."""
+    if config_dir is None:
+        configured_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        config_dir = (
+            Path(configured_dir).expanduser()
+            if configured_dir
+            else Path.home() / ".claude"
+        )
+
+    cache_dir = config_dir / "cache" / "model-catalog"
+    try:
+        candidates = sorted(
+            cache_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"could not read {cache_dir}: {exc}") from exc
+
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        models = payload.get("catalog", {}).get("config", {}).get("models")
+        if not isinstance(models, list):
+            continue
+        return [
+            model
+            for model in models
+            if isinstance(model, dict) and isinstance(model.get("id"), str)
+        ]
+
+    raise RuntimeError(f"no model catalog found under {cache_dir}")
 
 
 async def _codex_rpc(
@@ -139,6 +179,22 @@ def _format_efforts(model: dict[str, Any]) -> str:
     return f" [{rendered}]"
 
 
+def _format_claude_efforts(model: dict[str, Any]) -> str:
+    runtime = model.get("runtime", {})
+    if not isinstance(runtime, dict):
+        return ""
+    efforts = [
+        effort for effort in runtime.get("effort_levels", []) if isinstance(effort, str)
+    ]
+    if not efforts:
+        return ""
+    default = runtime.get("default_effort")
+    rendered = ", ".join(
+        f"{effort} (default)" if effort == default else effort for effort in efforts
+    )
+    return f" [{rendered}]"
+
+
 def render_available_models(settings: Settings) -> str:
     """Render configured defaults and models available through local provider CLIs."""
     lines = ["Configured defaults:"]
@@ -152,7 +208,17 @@ def render_available_models(settings: Settings) -> str:
     else:
         effort_text = f" [{', '.join(efforts)}]" if efforts else ""
         lines.extend(f"  claude-sdk/{alias}{effort_text}" for alias in aliases)
-        lines.append("  Full model IDs are also accepted by Claude Code.")
+
+    lines.extend(["", "Versioned Claude models in the local Claude Code catalog:"])
+    try:
+        claude_models = discover_claude_versioned_models()
+    except Exception as exc:
+        lines.append(f"  unavailable ({exc})")
+    else:
+        if not claude_models:
+            lines.append("  none advertised")
+        for model in claude_models:
+            lines.append(f"  claude-sdk/{model['id']}{_format_claude_efforts(model)}")
 
     lines.extend(["", "Codex models available to this account:"])
     try:

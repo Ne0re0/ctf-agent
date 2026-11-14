@@ -1,3 +1,4 @@
+import json
 from subprocess import CompletedProcess
 
 from backend import model_catalog
@@ -46,11 +47,61 @@ def test_discover_claude_models_falls_back_from_wrapper_help(monkeypatch):
     assert calls == [["/usr/bin/ourclaude", "--help"], ["/usr/bin/claude", "--help"]]
 
 
+def test_discover_claude_versioned_models_reads_local_catalog(tmp_path):
+    catalog_dir = tmp_path / "cache" / "model-catalog"
+    catalog_dir.mkdir(parents=True)
+    (catalog_dir / "published-floor.json").write_text(
+        json.dumps({"version": 1, "sources": []}), encoding="utf-8"
+    )
+    (catalog_dir / "account-cc.json").write_text(
+        json.dumps(
+            {
+                "catalog": {
+                    "config": {
+                        "models": [
+                            {
+                                "id": "claude-opus-5-5",
+                                "runtime": {
+                                    "effort_levels": ["low", "medium", "high"],
+                                    "default_effort": "medium",
+                                },
+                            },
+                            {"id": "claude-haiku-4-5-20251001", "runtime": {}},
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    models = model_catalog.discover_claude_versioned_models(tmp_path)
+
+    assert [model["id"] for model in models] == [
+        "claude-opus-5-5",
+        "claude-haiku-4-5-20251001",
+    ]
+
+
 def test_render_available_models_includes_claude_specs(monkeypatch):
     monkeypatch.setattr(
         model_catalog,
         "discover_claude_models",
         lambda command: (["opus", "sonnet"], ["medium", "high"]),
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "discover_claude_versioned_models",
+        lambda: [
+            {
+                "id": "claude-opus-5-5",
+                "runtime": {
+                    "effort_levels": ["low", "medium", "high"],
+                    "default_effort": "medium",
+                },
+            },
+            {"id": "claude-haiku-4-5-20251001", "runtime": {}},
+        ],
     )
     monkeypatch.setattr(model_catalog, "discover_codex_models", lambda command: _empty_models())
 
@@ -59,6 +110,9 @@ def test_render_available_models_includes_claude_specs(monkeypatch):
     assert "Claude models advertised by the local CLI:" in output
     assert "claude-sdk/opus [medium, high]" in output
     assert "claude-sdk/sonnet [medium, high]" in output
+    assert "Versioned Claude models in the local Claude Code catalog:" in output
+    assert "claude-sdk/claude-opus-5-5 [low, medium (default), high]" in output
+    assert "claude-sdk/claude-haiku-4-5-20251001" in output
 
 
 async def _empty_models():
