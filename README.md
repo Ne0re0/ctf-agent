@@ -155,12 +155,17 @@ Code catalog advertise, and the Codex models your account can use. A section tha
 
 ```
 my-chall/
-├── metadata.yml     # required
+├── metadata.yml     # optional: generated automatically when absent
 └── distfiles/       # optional: the files handed out with the challenge
 ```
 
+If `metadata.yml` is absent, `ctf-solve` creates one using the directory name and the
+description `Find the flag.`. This works with both `--challenge` and directories preloaded
+from `--challenges-dir`. For live submission, make sure the directory name exactly matches
+the CTFd challenge name, or provide an explicit `name` in `metadata.yml`.
+
 `metadata.yml` describes the challenge. Every field is optional, but the solvers only know
-what you put here, so give at least a description:
+what you put here, so provide more detail when it is available:
 
 ```yaml
 name: baby-rsa

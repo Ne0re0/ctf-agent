@@ -56,12 +56,12 @@ def build_deps(
 
     # Pre-load already-pulled challenges
     for d in Path(challenges_root).iterdir():
-        meta_path = d / "metadata.yml"
-        if meta_path.exists():
-            meta = ChallengeMeta.from_yaml(meta_path)
-            if meta.name not in deps.challenge_dirs:
-                deps.challenge_dirs[meta.name] = str(d)
-                deps.challenge_metas[meta.name] = meta
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        meta = ChallengeMeta.load_or_create(d)
+        if meta.name not in deps.challenge_dirs:
+            deps.challenge_dirs[meta.name] = str(d)
+            deps.challenge_metas[meta.name] = meta
 
     return ctfd, cost_tracker, deps
 

@@ -167,12 +167,11 @@ async def _run_single(
     await cleanup_orphan_containers()
 
     challenge_path = Path(challenge_dir)
-    meta_path = challenge_path / "metadata.yml"
-    if not meta_path.exists():
-        console.print(f"[red]No metadata.yml found in {challenge_dir}[/red]")
+    if not challenge_path.is_dir():
+        console.print(f"[red]Challenge directory not found: {challenge_dir}[/red]")
         sys.exit(1)
 
-    meta = ChallengeMeta.from_yaml(meta_path)
+    meta = ChallengeMeta.load_or_create(challenge_path)
     console.print(f"[bold]Challenge:[/bold] {meta.name} ({meta.category}, {meta.value} pts)")
 
     ctfd = CTFdClient(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,10 @@ from typing import Any
 import yaml
 
 from backend.tools.core import IMAGE_EXTS_FOR_VISION as IMAGE_EXTS
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_CHALLENGE_DESCRIPTION = "Find the flag."
 
 
 @dataclass
@@ -22,6 +27,33 @@ class ChallengeMeta:
     connection_info: str = ""
     hints: list[dict[str, Any]] = field(default_factory=list)
     solves: int = 0
+
+    @classmethod
+    def load_or_create(cls, challenge_dir: str | Path) -> ChallengeMeta:
+        """Load metadata.yml, creating a minimal fallback when it is absent."""
+        challenge_path = Path(challenge_dir)
+        meta_path = challenge_path / "metadata.yml"
+        if meta_path.exists():
+            return cls.from_yaml(meta_path)
+
+        data = {
+            "name": challenge_path.name,
+            "description": DEFAULT_CHALLENGE_DESCRIPTION,
+        }
+        meta_path.write_text(
+            yaml.safe_dump(
+                data,
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        logger.info("Generated default challenge metadata: %s", meta_path)
+        return cls(
+            name=challenge_path.name,
+            description=DEFAULT_CHALLENGE_DESCRIPTION,
+        )
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ChallengeMeta:
