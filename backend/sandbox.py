@@ -6,10 +6,13 @@ import asyncio
 import io
 import logging
 import os
+import re
 import shlex
 import socket
 import tarfile
 import tempfile
+import unicodedata
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,27 @@ _active_count: int = 0
 _count_lock = asyncio.Lock()
 
 _WARN_THRESHOLDS = {100, 200, 500}
+
+_CONTAINER_NAME_COMPONENT_LIMIT = 48
+
+
+def _docker_name_component(value: str, fallback: str) -> str:
+    """Return a readable component that is valid in a Docker container name."""
+    ascii_value = (
+        unicodedata.normalize("NFKD", value)
+        .encode("ascii", errors="ignore")
+        .decode("ascii")
+    )
+    component = re.sub(r"[^a-zA-Z0-9_.-]+", "-", ascii_value).strip("._-").lower()
+    component = component[:_CONTAINER_NAME_COMPONENT_LIMIT].rstrip("._-")
+    return component or fallback
+
+
+def _build_container_name(challenge_name: str, model_name: str) -> str:
+    challenge = _docker_name_component(challenge_name, "challenge")
+    model = _docker_name_component(model_name, "model")
+    unique_suffix = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    return f"ctf-agent-{challenge}-{model}-{unique_suffix}"
 
 
 def configure_semaphore(max_concurrent: int = 50) -> None:
@@ -137,10 +161,17 @@ class DockerSandbox:
     image: str
     challenge_dir: str
     memory_limit: str = "16g"
+    challenge_name: str = ""
+    model_name: str = ""
     workspace_dir: str = ""
+    container_name: str = field(init=False)
     _container: Any = field(default=None, repr=False)
     _docker: Any = field(default=None, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        challenge_name = self.challenge_name or Path(self.challenge_dir).name
+        self.container_name = _build_container_name(challenge_name, self.model_name)
 
     @property
     def container_id(self) -> str:
@@ -199,13 +230,16 @@ class DockerSandbox:
                 },
             }
 
-            self._container = await self._docker.containers.create(config)
+            self._container = await self._docker.containers.create(
+                config,
+                name=self.container_name,
+            )
             await self._container.start()
             await _track_start()
 
             info = await self._container.show()
             short_id = info["Id"][:12]
-            logger.info("Sandbox started: %s", short_id)
+            logger.info("Sandbox started: %s (%s)", self.container_name, short_id)
 
     async def exec(self, command: str, timeout_s: int = 300) -> ExecResult:
         if not self._container:

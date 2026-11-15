@@ -93,6 +93,8 @@ class ClaudeSolver:
             image=getattr(settings, "sandbox_image", "ctf-sandbox"),
             challenge_dir=challenge_dir,
             memory_limit=getattr(settings, "container_memory_limit", "4g"),
+            challenge_name=meta.name,
+            model_name=model_spec,
         )
         self.loop_detector = LoopDetector()
         # Include the effort so medium/max solvers get separate traces and log names

@@ -182,7 +182,8 @@ hints:
 
 Inside each sandbox, `distfiles/` is mounted read-only at `/challenge/distfiles/`,
 `metadata.yml` at `/challenge/metadata.yml`, and every solver gets its own writable
-`/challenge/workspace/`.
+`/challenge/workspace/`. Docker container names include the challenge and model names,
+followed by a unique suffix so concurrent runs do not collide.
 
 **Services on your machine:** `localhost` and `127.0.0.1` in `connection_info` are rewritten to
 `host.docker.internal`, which the sandboxes resolve to your host. The service must listen on an

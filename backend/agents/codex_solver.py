@@ -160,6 +160,8 @@ class CodexSolver:
             image=getattr(settings, "sandbox_image", "ctf-sandbox"),
             challenge_dir=challenge_dir,
             memory_limit=getattr(settings, "container_memory_limit", "4g"),
+            challenge_name=meta.name,
+            model_name=model_spec,
         )
         self.use_vision = supports_vision(model_spec)
         self.loop_detector = LoopDetector()
