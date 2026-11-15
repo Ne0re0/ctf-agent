@@ -50,7 +50,10 @@ A **coordinator** LLM manages the competition while **solver swarms** attack ind
      +-----------------+  +----------------+
 ```
 
-Each solver runs in its own Docker container with CTF tools pre-installed. Solvers never give up — they keep trying different approaches until the flag is found.
+Each solver runs in its own Docker container with CTF tools pre-installed. In a normal race,
+the first accepted flag is printed immediately and the sibling solvers are stopped. With
+`--writeup`, the winning conversation and sandbox stay alive for one final documentation turn;
+with `--benchmark`, every model keeps working independently for comparison.
 
 There are two ways to run it:
 
@@ -185,6 +188,11 @@ Inside each sandbox, `distfiles/` is mounted read-only at `/challenge/distfiles/
 `/challenge/workspace/`. Docker container names include the challenge and model names,
 followed by a unique suffix so concurrent runs do not collide.
 
+Only files under `distfiles/` are exposed to the solver container. Put downloadable source,
+binaries, archives, and other challenge inputs there; files elsewhere in the challenge directory
+are not mounted. A web challenge can omit `distfiles/` when `connection_info` points to a reachable
+service and black-box testing is sufficient.
+
 **Services on your machine:** `localhost` and `127.0.0.1` in `connection_info` are rewritten to
 `host.docker.internal`, which the sandboxes resolve to your host. The service must listen on an
 address the containers can reach (`0.0.0.0` or a Docker-published port, e.g.
@@ -202,8 +210,11 @@ ctf-solve --challenge ./my-chall --no-submit
   `CTFD_USER`/`CTFD_PASS`) under the challenge's `name`, and a solver only wins when CTFd
   accepts its flag. Use this for a challenge pulled from a live CTFd (see below).
 
-The run ends with `FLAG FOUND: ...` (or `No flag found.`) and a cost summary per solver.
-Press Ctrl+C to stop early. Pick the models with `--models` (see [Choosing models](#choosing-models)):
+The green `FLAG FOUND: ...` line appears as soon as a winner is selected, before sibling cleanup
+or optional writeup generation, so you can submit it without waiting. It is CTFd-confirmed in a
+live run and unverified with `--no-submit`. The run then ends with a cost summary per solver (or
+`No flag found.`). Press Ctrl+C to stop early. Pick the models with `--models` (see
+[Choosing models](#choosing-models)):
 
 ```bash
 ctf-solve --challenge ./my-chall --no-submit \
@@ -268,6 +279,8 @@ ctf-solve \
 - CTFd login: an API token (`--ctfd-token` / `CTFD_TOKEN`) is used when set, otherwise
   `CTFD_USER` / `CTFD_PASS`.
 - `--no-submit` still reads challenges from CTFd but never submits a flag.
+- `--writeup` saves each winner's document as `<challenges-dir>/<slug>/writeup.md`; the accepted
+  flag is still printed before document generation starts.
 - It runs until Ctrl+C, then prints the flags found and the total cost.
 - Every solver has its own container (2 CPUs, up to `CONTAINER_MEMORY_LIMIT`, 16g by default),
   so up to `--max-challenges` × number of models containers run at once. Size both to your host.
@@ -497,10 +510,14 @@ The full list is in `sandbox/sandbox-tools.txt` (also at `/tools.txt` inside the
 ## Features
 
 - **Multi-model racing** — multiple AI models attack each challenge simultaneously
+- **Independent benchmarking** — compare solve order, elapsed time, and safety-filter outcomes
+- **Winner writeups** — retain the winning session and sandbox to produce a reproducible solution
+- **Immediate flag display** — print the accepted flag before cleanup or writeup generation
 - **Auto-spawn** — new challenges detected and attacked automatically
 - **Coordinator LLM** — reads solver traces, crafts targeted technical guidance
 - **Cross-solver insights** — findings shared between models via message bus
-- **Docker sandboxes** — isolated containers with full CTF tooling
+- **Docker sandboxes** — isolated, readable challenge/model-named containers with full CTF tooling
+- **Minimal challenge setup** — generate fallback metadata automatically when `metadata.yml` is absent
 - **Operator messaging** — send hints to running solvers mid-competition
 
 ## Development
