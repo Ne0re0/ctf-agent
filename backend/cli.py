@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.table import Table
 
 from backend.config import Settings, resolve_cli
 from backend.model_catalog import render_available_models
@@ -79,6 +80,11 @@ def _setup_logging(verbose: bool = False) -> None:
     is_flag=True,
     help="Ask the winning solver for writeup.md before cleaning up its sandbox",
 )
+@click.option(
+    "--benchmark",
+    is_flag=True,
+    help="Keep all models running for up to 10 minutes after the first solve (requires --challenge)",
+)
 @click.option("--coordinator-model", default=None, help="Model for coordinator (default: claude-opus-4-6)")
 @click.option("--coordinator", default="claude", type=click.Choice(["claude", "codex"]), help="Coordinator backend")
 @click.option("--max-challenges", default=10, type=int, help="Max challenges solved concurrently")
@@ -95,6 +101,7 @@ def main(
     challenges_dir: str,
     no_submit: bool,
     writeup: bool,
+    benchmark: bool,
     coordinator_model: str | None,
     coordinator: str,
     max_challenges: int,
@@ -121,6 +128,10 @@ def main(
     settings.max_concurrent_challenges = max_challenges
 
     model_specs = list(models) if models else list(DEFAULT_MODELS)
+    if benchmark and not challenge:
+        raise click.UsageError("--benchmark requires --challenge")
+    if benchmark and writeup:
+        raise click.UsageError("--writeup cannot be combined with --benchmark")
 
     # Resolve the CLIs this run needs now, so a wrong command fails here with a clear message
     providers = {spec.split("/", 1)[0] for spec in model_specs}
@@ -145,6 +156,8 @@ def main(
         console.print(f"  {setting}: {path}")
     console.print(f"  Image: {settings.sandbox_image}")
     console.print(f"  Max challenges: {max_challenges}")
+    if benchmark:
+        console.print("  Benchmark: 10-minute grace period after first solve")
     if writeup:
         console.print("  Winner writeup: enabled")
     console.print()
@@ -158,6 +171,7 @@ def main(
                 no_submit,
                 max_challenges,
                 msg_port,
+                benchmark,
                 writeup,
             )
         )
@@ -184,6 +198,7 @@ async def _run_single(
     no_submit: bool,
     max_challenges: int,
     msg_port: int = 0,
+    benchmark: bool = False,
     writeup: bool = False,
 ) -> None:
     """Run a single challenge with a swarm."""
@@ -227,6 +242,7 @@ async def _run_single(
         settings=settings,
         model_specs=model_specs,
         no_submit=no_submit,
+        benchmark=benchmark,
         writeup=writeup,
         on_winner=_announce_winner,
     )
@@ -260,6 +276,8 @@ async def _run_single(
         for agent_name in cost_tracker.by_agent:
             console.print(f"  {agent_name}: {cost_tracker.format_usage(agent_name)}")
         console.print(f"  [bold]Total: ${cost_tracker.total_cost_usd:.2f}[/bold]")
+        if benchmark:
+            _print_benchmark_summary(swarm)
         if swarm.writeup_path:
             console.print(f"\n[bold green]Writeup:[/bold green] {swarm.writeup_path}")
         elif writeup and result and result.status == FLAG_FOUND:
@@ -269,6 +287,56 @@ async def _run_single(
         if msg_server:
             msg_server.close()
         await ctfd.close()
+
+
+def _format_benchmark_time(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    minutes, remaining = divmod(seconds, 60)
+    if minutes >= 1:
+        return f"{int(minutes)}m {remaining:04.1f}s"
+    return f"{remaining:.1f}s"
+
+
+def _print_benchmark_summary(swarm) -> None:
+    """Render solve order, wall-clock time, and safety-filter outcomes."""
+    from backend.agents.swarm import BENCHMARK_TIMEOUT
+    from backend.solver_base import ERROR, FLAG_FOUND, GAVE_UP, POLICY_BLOCKED, QUOTA_ERROR
+
+    labels = {
+        FLAG_FOUND: "Solved",
+        BENCHMARK_TIMEOUT: "Timed out",
+        POLICY_BLOCKED: "Safety blocked",
+        QUOTA_ERROR: "Quota error",
+        GAVE_UP: "Gave up",
+        ERROR: "Error",
+        "cancelled": "Cancelled",
+        "running": "Running",
+    }
+    records = sorted(
+        swarm.benchmark_results.values(),
+        key=lambda record: (
+            record.order is None,
+            record.order if record.order is not None else 0,
+            record.model_spec,
+        ),
+    )
+    table = Table(title="Benchmark Results")
+    table.add_column("Order", justify="right")
+    table.add_column("Model")
+    table.add_column("Result")
+    table.add_column("Solve time", justify="right")
+    table.add_column("Safety guard", justify="center")
+    for record in records:
+        table.add_row(
+            str(record.order) if record.order is not None else "—",
+            record.model_spec,
+            labels.get(record.status, record.status.replace("_", " ").title()),
+            _format_benchmark_time(record.solve_seconds),
+            "[red]Yes[/red]" if record.safety_flagged else "No",
+        )
+    console.print()
+    console.print(table)
 
 
 async def _run_coordinator(

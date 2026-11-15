@@ -230,7 +230,26 @@ so it can be submitted to the competition platform without waiting for the docum
 Writeup generation is bounded to five minutes and does not prevent normal cleanup if it fails.
 The winner trace records `writeup_start`, `writeup_complete`, or `writeup_failed`. A writeup from
 `--no-submit` explicitly marks the flag as unverified because dry-run flags are not checked by
-CTFd. `--writeup` also works in coordinator mode.
+CTFd. `--writeup` also works in coordinator mode, but cannot be combined with `--benchmark`.
+
+### Benchmark models
+
+Add `--benchmark` to a single-challenge run to measure every requested model independently:
+
+```bash
+ctf-solve --challenge ./my-chall --benchmark --no-submit \
+  --models claude-sdk/claude-opus-4-6/max \
+  --models codex/gpt-6.1-sol
+```
+
+The first solver to find a flag starts a 10-minute grace period. Other solvers keep working
+until they find it too or the grace period expires. Sibling findings are disabled in benchmark
+mode so one model cannot copy another model's flag. The final table reports solve order, elapsed
+wall-clock time, result, and whether each model encountered a provider safety guard.
+
+Without `--no-submit`, the first accepted flag is verified by CTFd and later submissions are
+checked locally against that confirmed flag. With `--no-submit`, reported flags cannot be
+verified, just like an ordinary dry run. `--benchmark` currently requires `--challenge`.
 
 ## Competition mode (CTFd)
 
@@ -407,6 +426,7 @@ printed at startup, and a command that can't be found stops the run with the set
 | `--challenge DIR` | | Solve one local challenge directory (no coordinator) |
 | `--no-submit` | off | Dry run: never submit flags to CTFd |
 | `--writeup` | off | Keep the winner alive for one final turn and save `<challenge>/writeup.md` |
+| `--benchmark` | off | Keep all models running for up to 10 minutes after the first solve; requires `--challenge` |
 | `--models SPEC` | `DEFAULT_MODELS` | Solver model; repeat to race several. Without a value: list available models |
 | `--challenges-dir DIR` | `challenges` | Competition mode: where challenges are downloaded |
 | `--max-challenges N` | `10` | Max challenges solved at once |

@@ -41,6 +41,21 @@ QUOTA_FALLBACK: dict[str, str] = {
     "codex/gpt-5.3-codex-spark": "zen/gpt-5.3-codex-spark",
 }
 
+BENCHMARK_TIMEOUT = "timeout"
+
+
+@dataclass
+class BenchmarkRecord:
+    """Final benchmark state for one requested model."""
+
+    model_spec: str
+    status: str = "running"
+    solve_seconds: float | None = None
+    order: int | None = None
+    safety_flagged: bool = False
+    flag: str | None = None
+
+
 def _quota_fallback_spec(model_spec: str) -> str | None:
     return QUOTA_FALLBACK.get(model_spec)
 
@@ -56,6 +71,8 @@ class ChallengeSwarm:
     settings: Settings
     model_specs: list[str] = field(default_factory=lambda: list(DEFAULT_MODELS))
     no_submit: bool = False
+    benchmark: bool = False
+    benchmark_grace_seconds: float = 600.0
     writeup: bool = False
     writeup_timeout_seconds: float = 300.0
     on_winner: Callable[[SolverResult], None] | None = None
@@ -71,8 +88,11 @@ class ChallengeSwarm:
     _submitted_flags: set[str] = field(default_factory=set)  # dedup exact flags
     _last_submit_time: dict[str, float] = field(default_factory=dict)  # per-model last submit timestamp
     message_bus: ChallengeMessageBus = field(default_factory=ChallengeMessageBus)
+    benchmark_results: dict[str, BenchmarkRecord] = field(default_factory=dict)
     writeup_path: str | None = field(default=None, init=False)
     writeup_in_progress: bool = field(default=False, init=False)
+    _benchmark_started_at: float | None = field(default=None, init=False, repr=False)
+    _benchmark_first_solve_at: float | None = field(default=None, init=False, repr=False)
     _winner_solver: SolverProtocol | None = field(default=None, init=False, repr=False)
     _winner_model_spec: str | None = field(default=None, init=False, repr=False)
     _writeup_task: asyncio.Task[str] | None = field(default=None, init=False, repr=False)
@@ -170,13 +190,16 @@ class ChallengeSwarm:
     async def try_submit_flag(self, flag: str, model_spec: str) -> tuple[str, bool]:
         """Cooldown-gated, deduplicated flag submission. Returns (display, is_confirmed)."""
         async with self._flag_lock:
-            if self.confirmed_flag:
-                return f"ALREADY SOLVED — flag already confirmed: {self.confirmed_flag}", True
-
             normalized = flag.strip()
 
-            # Dedup exact flags across all models
-            if normalized in self._submitted_flags:
+            if self.confirmed_flag:
+                if self.benchmark and normalized != self.confirmed_flag:
+                    return "INCORRECT — does not match the confirmed benchmark flag.", False
+                return f"ALREADY SOLVED — flag already confirmed: {self.confirmed_flag}", True
+
+            # Normal races deduplicate globally. Benchmarks keep attempts independent.
+            dedup_key = f"{model_spec}\0{normalized}" if self.benchmark else normalized
+            if dedup_key in self._submitted_flags:
                 return "INCORRECT — already tried this exact flag.", False
 
             # Escalating cooldown after incorrect submissions
@@ -195,7 +218,7 @@ class ChallengeSwarm:
                         False,
                     )
 
-            self._submitted_flags.add(normalized)
+            self._submitted_flags.add(dedup_key)
 
             from backend.tools.core import do_submit_flag
             display, is_confirmed = await do_submit_flag(self.ctfd, self.meta.name, flag)
@@ -205,6 +228,45 @@ class ChallengeSwarm:
                 self._submit_count[model_spec] = wrong_count + 1
                 self._last_submit_time[model_spec] = time.monotonic()
             return display, is_confirmed
+
+    def _record_benchmark_solve(self, model_spec: str, result: SolverResult) -> None:
+        now = time.monotonic()
+        started_at = self._benchmark_started_at or now
+        record = self.benchmark_results.setdefault(model_spec, BenchmarkRecord(model_spec))
+        if record.order is None:
+            record.order = 1 + sum(
+                existing.order is not None
+                for existing in self.benchmark_results.values()
+            )
+            record.solve_seconds = max(0.0, now - started_at)
+        record.status = FLAG_FOUND
+        record.flag = result.flag
+
+        if self._benchmark_first_solve_at is None:
+            self._benchmark_first_solve_at = now
+            self.winner = result
+            logger.info(
+                "[%s] Benchmark first solve by %s; remaining models have %.0fs",
+                self.meta.name,
+                model_spec,
+                self.benchmark_grace_seconds,
+            )
+
+    def _record_benchmark_completion(
+        self,
+        model_spec: str,
+        result: SolverResult | None,
+    ) -> None:
+        record = self.benchmark_results.setdefault(model_spec, BenchmarkRecord(model_spec))
+        if record.status == FLAG_FOUND:
+            return
+        record.status = result.status if result else ERROR
+
+    def _mark_benchmark_safety_flag(self, model_spec: str) -> None:
+        if not self.benchmark:
+            return
+        record = self.benchmark_results.setdefault(model_spec, BenchmarkRecord(model_spec))
+        record.safety_flagged = True
 
     async def _run_solver(self, model_spec: str) -> SolverResult | None:
         solver = self._create_solver(model_spec)
@@ -220,6 +282,7 @@ class ChallengeSwarm:
         finally:
             retain_winner = (
                 self.writeup
+                and not self.benchmark
                 and solver is self._winner_solver
             )
             if not retain_winner:
@@ -240,7 +303,8 @@ class ChallengeSwarm:
             result = await solver.run_until_done_or_gave_up()
 
             # Only broadcast useful findings — skip errors and broken solvers
-            if (result.status not in (ERROR, QUOTA_ERROR, POLICY_BLOCKED)
+            if (not self.benchmark
+                    and result.status not in (ERROR, QUOTA_ERROR, POLICY_BLOCKED)
                     and not (result.step_count == 0 and result.cost_usd == 0)
                     and result.findings_summary
                     and not result.findings_summary.startswith(("Error:", "Turn failed:"))):
@@ -248,7 +312,9 @@ class ChallengeSwarm:
                 await self.message_bus.post(model_spec, result.findings_summary[:500])
 
             if result.status == FLAG_FOUND:
-                if self.winner is None:
+                if self.benchmark:
+                    self._record_benchmark_solve(model_spec, result)
+                elif self.winner is None:
                     self.cancel_event.set()
                     self.winner = result
                     self._winner_solver = solver
@@ -289,6 +355,7 @@ class ChallengeSwarm:
             # work, and both providers say to retry in a new session. Restart a bounded
             # number of times, then leave the challenge to the other models.
             if result.status == POLICY_BLOCKED:
+                self._mark_benchmark_safety_flag(model_spec)
                 if policy_restarts >= self.MAX_POLICY_RESTARTS:
                     logger.error(
                         f"[{self.meta.name}/{model_spec}] Blocked by the provider's safety filter "
@@ -447,12 +514,86 @@ complete Markdown document; do not wrap the whole document in a Markdown code fe
             self._writeup_task = None
             self.writeup_in_progress = False
 
+    async def _run_benchmark(
+        self,
+        tasks: list[asyncio.Task],
+        task_models: dict[asyncio.Task, str],
+    ) -> SolverResult | None:
+        """Run every solver independently until completion or the post-solve deadline."""
+        active = set(tasks)
+        try:
+            while active:
+                timeout = None
+                if self._benchmark_first_solve_at is not None:
+                    deadline = self._benchmark_first_solve_at + self.benchmark_grace_seconds
+                    timeout = max(0.0, deadline - time.monotonic())
+
+                done, pending = await asyncio.wait(
+                    active,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if not done:
+                    for task in pending:
+                        model_spec = task_models[task]
+                        record = self.benchmark_results[model_spec]
+                        if record.status == "running":
+                            record.status = BENCHMARK_TIMEOUT
+                    self.cancel_event.set()
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    logger.info(
+                        "[%s] Benchmark grace period expired; stopped %d model(s)",
+                        self.meta.name,
+                        len(pending),
+                    )
+                    return self.winner
+
+                for task in done:
+                    model_spec = task_models[task]
+                    try:
+                        result = task.result()
+                    except asyncio.CancelledError:
+                        result = None
+                    except Exception:
+                        result = None
+                    self._record_benchmark_completion(model_spec, result)
+
+                active = pending
+
+            self.cancel_event.set()
+            return self.winner
+        except asyncio.CancelledError:
+            self.cancel_event.set()
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            raise
+        except Exception as e:
+            logger.error(f"[{self.meta.name}] Benchmark error: {e}", exc_info=True)
+            self.cancel_event.set()
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            return self.winner
+
     async def run(self) -> SolverResult | None:
         """Run all solvers in parallel. Returns the winner's result or None."""
         tasks = [
             asyncio.create_task(self._run_solver(spec), name=f"solver-{spec}")
             for spec in self.model_specs
         ]
+        if self.benchmark:
+            self._benchmark_started_at = time.monotonic()
+            self.benchmark_results = {
+                spec: BenchmarkRecord(model_spec=spec)
+                for spec in self.model_specs
+            }
+            task_models = dict(zip(tasks, self.model_specs, strict=True))
+            return await self._run_benchmark(tasks, task_models)
+
         try:
             while tasks:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -489,7 +630,7 @@ complete Markdown document; do not wrap the whole document in a Markdown code fe
             return None
         finally:
             self.writeup_in_progress = False
-            if self._winner_solver and self.writeup:
+            if self._winner_solver and self.writeup and not self.benchmark:
                 await self._winner_solver.stop()
                 self._winner_solver = None
 
