@@ -43,6 +43,7 @@ class CoordinatorDeps:
     model_specs: list[str] = field(default_factory=list)
     challenges_root: str = "challenges"
     no_submit: bool = False
+    writeup: bool = False
     max_concurrent_challenges: int = 10
 
     msg_port: int = 0  # 0 = auto-pick free port

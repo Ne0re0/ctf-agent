@@ -74,6 +74,11 @@ def _setup_logging(verbose: bool = False) -> None:
 @click.option("--challenge", default=None, help="Solve a single challenge directory")
 @click.option("--challenges-dir", default="challenges", help="Directory for challenge files")
 @click.option("--no-submit", is_flag=True, help="Dry run — don't submit flags")
+@click.option(
+    "--writeup",
+    is_flag=True,
+    help="Ask the winning solver for writeup.md before cleaning up its sandbox",
+)
 @click.option("--coordinator-model", default=None, help="Model for coordinator (default: claude-opus-4-6)")
 @click.option("--coordinator", default="claude", type=click.Choice(["claude", "codex"]), help="Coordinator backend")
 @click.option("--max-challenges", default=10, type=int, help="Max challenges solved concurrently")
@@ -89,6 +94,7 @@ def main(
     challenge: str | None,
     challenges_dir: str,
     no_submit: bool,
+    writeup: bool,
     coordinator_model: str | None,
     coordinator: str,
     max_challenges: int,
@@ -139,12 +145,36 @@ def main(
         console.print(f"  {setting}: {path}")
     console.print(f"  Image: {settings.sandbox_image}")
     console.print(f"  Max challenges: {max_challenges}")
+    if writeup:
+        console.print("  Winner writeup: enabled")
     console.print()
 
     if challenge:
-        asyncio.run(_run_single(settings, challenge, model_specs, no_submit, max_challenges, msg_port))
+        asyncio.run(
+            _run_single(
+                settings,
+                challenge,
+                model_specs,
+                no_submit,
+                max_challenges,
+                msg_port,
+                writeup,
+            )
+        )
     else:
-        asyncio.run(_run_coordinator(settings, model_specs, challenges_dir, no_submit, coordinator_model, coordinator, max_challenges, msg_port))
+        asyncio.run(
+            _run_coordinator(
+                settings,
+                model_specs,
+                challenges_dir,
+                no_submit,
+                coordinator_model,
+                coordinator,
+                max_challenges,
+                msg_port,
+                writeup,
+            )
+        )
 
 
 async def _run_single(
@@ -154,6 +184,7 @@ async def _run_single(
     no_submit: bool,
     max_challenges: int,
     msg_port: int = 0,
+    writeup: bool = False,
 ) -> None:
     """Run a single challenge with a swarm."""
     from backend.agents.swarm import ChallengeSwarm
@@ -181,6 +212,12 @@ async def _run_single(
         password=settings.ctfd_pass,
     )
     cost_tracker = CostTracker()
+    winner_announced = False
+
+    def _announce_winner(result) -> None:
+        nonlocal winner_announced
+        console.print(f"\n[bold green]FLAG FOUND:[/bold green] {result.flag}")
+        winner_announced = True
 
     swarm = ChallengeSwarm(
         challenge_dir=str(challenge_path),
@@ -190,6 +227,8 @@ async def _run_single(
         settings=settings,
         model_specs=model_specs,
         no_submit=no_submit,
+        writeup=writeup,
+        on_winner=_announce_winner,
     )
 
     # Operator messages: `ctf-msg --port N "hint"` reaches every solver within ~5 tool calls
@@ -212,7 +251,8 @@ async def _run_single(
         result = await swarm.run()
         from backend.solver_base import FLAG_FOUND
         if result and result.status == FLAG_FOUND:
-            console.print(f"\n[bold green]FLAG FOUND:[/bold green] {result.flag}")
+            if not winner_announced:
+                console.print(f"\n[bold green]FLAG FOUND:[/bold green] {result.flag}")
         else:
             console.print("\n[bold red]No flag found.[/bold red]")
 
@@ -220,6 +260,10 @@ async def _run_single(
         for agent_name in cost_tracker.by_agent:
             console.print(f"  {agent_name}: {cost_tracker.format_usage(agent_name)}")
         console.print(f"  [bold]Total: ${cost_tracker.total_cost_usd:.2f}[/bold]")
+        if swarm.writeup_path:
+            console.print(f"\n[bold green]Writeup:[/bold green] {swarm.writeup_path}")
+        elif writeup and result and result.status == FLAG_FOUND:
+            console.print("\n[bold red]Writeup generation failed; check the winner trace.[/bold red]")
     finally:
         relay_task.cancel()
         if msg_server:
@@ -236,6 +280,7 @@ async def _run_coordinator(
     coordinator_backend: str,
     max_challenges: int,
     msg_port: int = 0,
+    writeup: bool = False,
 ) -> None:
     """Run the full coordinator (continuous until Ctrl+C)."""
     from backend.sandbox import cleanup_orphan_containers, configure_semaphore
@@ -254,6 +299,7 @@ async def _run_coordinator(
             no_submit=no_submit,
             coordinator_model=coordinator_model,
             msg_port=msg_port,
+            writeup=writeup,
         )
     else:
         from backend.agents.claude_coordinator import run_claude_coordinator
@@ -264,6 +310,7 @@ async def _run_coordinator(
             no_submit=no_submit,
             coordinator_model=coordinator_model,
             msg_port=msg_port,
+            writeup=writeup,
         )
 
     console.print("\n[bold]Final Results:[/bold]")

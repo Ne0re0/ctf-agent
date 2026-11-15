@@ -215,6 +215,23 @@ ctf-solve --challenge ./my-chall --no-submit \
 While it runs you can watch the traces in `./logs/` and send hints with `ctf-msg`
 (see [Watching and talking to solvers](#watching-and-talking-to-solvers)).
 
+### Generate a winner writeup
+
+Add `--writeup` to keep the first successful solver's conversation and sandbox alive long
+enough for one final turn. Sibling solvers are stopped first, then the winner writes a detailed,
+reproducible Markdown solution to `writeup.md` in the challenge directory:
+
+```bash
+ctf-solve --challenge ./my-chall --writeup --no-submit
+```
+
+The confirmed flag is printed in green immediately, before sibling cleanup and writeup generation,
+so it can be submitted to the competition platform without waiting for the document.
+Writeup generation is bounded to five minutes and does not prevent normal cleanup if it fails.
+The winner trace records `writeup_start`, `writeup_complete`, or `writeup_failed`. A writeup from
+`--no-submit` explicitly marks the flag as unverified because dry-run flags are not checked by
+CTFd. `--writeup` also works in coordinator mode.
+
 ## Competition mode (CTFd)
 
 ```bash
@@ -389,6 +406,7 @@ printed at startup, and a command that can't be found stops the run with the set
 |--------|---------|-------------|
 | `--challenge DIR` | | Solve one local challenge directory (no coordinator) |
 | `--no-submit` | off | Dry run: never submit flags to CTFd |
+| `--writeup` | off | Keep the winner alive for one final turn and save `<challenge>/writeup.md` |
 | `--models SPEC` | `DEFAULT_MODELS` | Solver model; repeat to race several. Without a value: list available models |
 | `--challenges-dir DIR` | `challenges` | Competition mode: where challenges are downloaded |
 | `--max-challenges N` | `10` | Max challenges solved at once |

@@ -24,3 +24,16 @@ def solver_output_json_schema() -> dict:
         "required": ["type", "flag", "method"],
         "additionalProperties": False,
     }
+
+
+def writeup_output_json_schema() -> dict:
+    """Structured output schema for a post-solve Markdown writeup."""
+    return {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["writeup"]},
+            "writeup": {"type": "string"},
+        },
+        "required": ["type", "writeup"],
+        "additionalProperties": False,
+    }

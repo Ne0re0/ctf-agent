@@ -30,6 +30,7 @@ def build_deps(
     no_submit: bool = False,
     challenge_dirs: dict[str, str] | None = None,
     challenge_metas: dict[str, ChallengeMeta] | None = None,
+    writeup: bool = False,
 ) -> tuple[CTFdClient, CostTracker, CoordinatorDeps]:
     """Create CTFd client, cost tracker, and coordinator deps."""
     ctfd = CTFdClient(
@@ -49,6 +50,7 @@ def build_deps(
         model_specs=specs,
         challenges_root=challenges_root,
         no_submit=no_submit,
+        writeup=writeup,
         max_concurrent_challenges=getattr(settings, "max_concurrent_challenges", 10),
         challenge_dirs=challenge_dirs or {},
         challenge_metas=challenge_metas or {},

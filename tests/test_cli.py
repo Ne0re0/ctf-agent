@@ -44,8 +44,17 @@ def test_empty_models_assignment_prints_catalog(monkeypatch):
 def test_valued_models_remains_repeatable(monkeypatch):
     captured = {}
 
-    async def fake_run_single(settings, challenge, model_specs, no_submit, max_challenges, msg_port):
+    async def fake_run_single(
+        settings,
+        challenge,
+        model_specs,
+        no_submit,
+        max_challenges,
+        msg_port,
+        writeup,
+    ):
         captured["models"] = model_specs
+        captured["writeup"] = writeup
 
     monkeypatch.setattr(cli, "_run_single", fake_run_single)
 
@@ -66,3 +75,36 @@ def test_valued_models_remains_repeatable(monkeypatch):
         "google/gemini-3-flash-preview",
         "azure/gpt-5.4",
     ]
+    assert captured["writeup"] is False
+
+
+def test_writeup_is_forwarded_to_single_challenge(monkeypatch):
+    captured = {}
+
+    async def fake_run_single(
+        settings,
+        challenge,
+        model_specs,
+        no_submit,
+        max_challenges,
+        msg_port,
+        writeup,
+    ):
+        captured["challenge"] = challenge
+        captured["writeup"] = writeup
+
+    monkeypatch.setattr(cli, "_run_single", fake_run_single)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "--challenge",
+            "writeup-challenge",
+            "--writeup",
+            "--models",
+            "google/gemini-3-flash-preview",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {"challenge": "writeup-challenge", "writeup": True}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 # Status constants
 FLAG_FOUND = "flag_found"
@@ -45,9 +45,10 @@ class SolverProtocol(Protocol):
 
     model_spec: str
     agent_name: str
-    sandbox: object
+    sandbox: Any
 
     async def start(self) -> None: ...
     async def run_until_done_or_gave_up(self) -> SolverResult: ...
+    async def generate_writeup(self, prompt: str) -> str: ...
     def bump(self, insights: str) -> None: ...
     async def stop(self) -> None: ...

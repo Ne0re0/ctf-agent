@@ -13,6 +13,7 @@ import logging
 import re
 import shlex
 import time
+from dataclasses import replace
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -29,7 +30,7 @@ from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
 from backend.models import model_id_from_spec
-from backend.output_types import solver_output_json_schema
+from backend.output_types import solver_output_json_schema, writeup_output_json_schema
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
 from backend.solver_base import (
@@ -438,6 +439,68 @@ class ClaudeSolver:
             if "quota" in error_str.lower() or "rate" in error_str.lower() or "overloaded" in error_str.lower():
                 return self._result(QUOTA_ERROR)
             return self._result(ERROR)
+
+    async def generate_writeup(self, prompt: str) -> str:
+        """Resume the winning Claude session with a writeup-specific output schema."""
+        if not self._client:
+            await self.start()
+        assert self._client is not None
+        if not self._session_id:
+            raise RuntimeError("Claude session ID is unavailable for writeup generation")
+        self.loop_detector.reset()
+
+        options = replace(
+            self._client.options,
+            resume=self._session_id,
+            output_format={"type": "json_schema", "schema": writeup_output_json_schema()},
+        )
+        await self._client.__aexit__(None, None, None)
+        self._client = ClaudeSDKClient(options=options)
+        await self._client.__aenter__()
+
+        self._turn_usage = (0, 0, 0, 0)
+        text_parts: list[str] = []
+        structured_writeup: str | None = None
+        error_text: str | None = None
+
+        await self._client.query(prompt)
+        async for message in self._client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock) and block.text:
+                        text_parts.append(block.text)
+                        self.tracer.model_response(block.text, self._step_count)
+                if (
+                    message.usage
+                    and message.message_id
+                    and message.message_id not in self._counted_msg_ids
+                ):
+                    self._counted_msg_ids.add(message.message_id)
+                    self._record_usage(*_claude_usage(message.usage))
+            elif isinstance(message, SystemMessage) and message.subtype == "init":
+                self._note_session(message.data.get("session_id"))
+            elif isinstance(message, ResultMessage):
+                self._note_session(message.session_id)
+                if message.usage:
+                    total = _claude_usage(message.usage)
+                    self._record_usage(
+                        *(max(0, total_value - counted) for total_value, counted in zip(
+                            total, self._turn_usage, strict=True
+                        ))
+                    )
+                self._sync_reported_cost(message.total_cost_usd)
+                if message.is_error:
+                    error_text = message.result or "Claude writeup turn failed"
+                output = getattr(message, "structured_output", None)
+                if output and output.get("type") == "writeup":
+                    structured_writeup = output.get("writeup")
+
+        if error_text:
+            raise RuntimeError(error_text)
+        writeup = structured_writeup or "\n\n".join(text_parts)
+        if not writeup.strip():
+            raise RuntimeError("Claude returned an empty writeup")
+        return writeup.strip()
 
     def _record_usage(self, input_tokens: int, cache_read: int, cache_write: int, output_tokens: int) -> None:
         if not (input_tokens or output_tokens):

@@ -266,6 +266,53 @@ class Solver:
             self.tracer.event("error", error=str(e))
             return self._result(ERROR)
 
+    async def generate_writeup(self, prompt: str) -> str:
+        """Continue the winning conversation and return a detailed Markdown writeup."""
+        if not self._agent:
+            await self.start()
+        assert self._agent is not None
+        self.loop_detector.reset()
+
+        from pydantic_ai.usage import UsageLimits
+
+        t0 = time.monotonic()
+        result = await self._agent.run(
+            prompt,
+            output_type=str,
+            deps=self.deps,
+            message_history=self._messages if self._messages else None,
+            usage_limits=UsageLimits(request_limit=None),
+        )
+        duration = time.monotonic() - t0
+        usage = result.usage
+        self.cost_tracker.record(
+            self.agent_name,
+            usage,
+            self.model_id,
+            provider_spec=provider_from_spec(self.model_spec),
+            duration_seconds=duration,
+        )
+        agent_usage = self.cost_tracker.by_agent.get(self.agent_name)
+        self.tracer.usage(
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            agent_usage.cost_usd if agent_usage else 0.0,
+        )
+        self._messages = result.all_messages()
+
+        from pydantic_ai.messages import ModelResponse, TextPart
+
+        for message in result.new_messages():
+            if isinstance(message, ModelResponse):
+                text = " ".join(
+                    part.content for part in message.parts if isinstance(part, TextPart)
+                )
+                if text:
+                    self.tracer.model_response(text, self._step_count[0])
+
+        return str(result.output).strip()
+
     def bump(self, insights: str) -> None:
         """Inject insights from siblings and prepare to resume."""
         bump_msg = ModelRequest(

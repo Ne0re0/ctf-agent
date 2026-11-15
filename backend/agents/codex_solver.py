@@ -25,7 +25,7 @@ from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
 from backend.models import model_id_from_spec, supports_vision
-from backend.output_types import solver_output_json_schema
+from backend.output_types import solver_output_json_schema, writeup_output_json_schema
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
 from backend.solver_base import (
@@ -541,6 +541,33 @@ class CodexSolver:
             if "quota" in error_str.lower() or "rate" in error_str.lower():
                 return self._result(QUOTA_ERROR)
             return self._result(ERROR)
+
+    async def generate_writeup(self, prompt: str) -> str:
+        """Continue the winning Codex thread and return its Markdown writeup."""
+        if not self._proc:
+            await self.start()
+        assert self._thread_id
+        self.loop_detector.reset()
+
+        self._turn_done.clear()
+        self._structured_output = None
+        self._turn_error = None
+        await self._rpc(
+            "turn/start",
+            {
+                "threadId": self._thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "outputSchema": writeup_output_json_schema(),
+            },
+        )
+        await self._turn_done.wait()
+
+        if self._turn_error:
+            raise RuntimeError(self._turn_error)
+        output = self._structured_output or {}
+        if output.get("type") != "writeup" or not output.get("writeup", "").strip():
+            raise RuntimeError("Codex returned an empty or invalid writeup")
+        return output["writeup"].strip()
 
     def bump(self, insights: str) -> None:
         self._bump_insights = insights

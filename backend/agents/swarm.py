@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from backend.agents.solver import Solver
@@ -39,7 +41,6 @@ QUOTA_FALLBACK: dict[str, str] = {
     "codex/gpt-5.3-codex-spark": "zen/gpt-5.3-codex-spark",
 }
 
-
 def _quota_fallback_spec(model_spec: str) -> str | None:
     return QUOTA_FALLBACK.get(model_spec)
 
@@ -55,6 +56,9 @@ class ChallengeSwarm:
     settings: Settings
     model_specs: list[str] = field(default_factory=lambda: list(DEFAULT_MODELS))
     no_submit: bool = False
+    writeup: bool = False
+    writeup_timeout_seconds: float = 300.0
+    on_winner: Callable[[SolverResult], None] | None = None
     coordinator_inbox: asyncio.Queue | None = None
 
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -67,6 +71,12 @@ class ChallengeSwarm:
     _submitted_flags: set[str] = field(default_factory=set)  # dedup exact flags
     _last_submit_time: dict[str, float] = field(default_factory=dict)  # per-model last submit timestamp
     message_bus: ChallengeMessageBus = field(default_factory=ChallengeMessageBus)
+    writeup_path: str | None = field(default=None, init=False)
+    writeup_in_progress: bool = field(default=False, init=False)
+    _winner_solver: SolverProtocol | None = field(default=None, init=False, repr=False)
+    _winner_model_spec: str | None = field(default=None, init=False, repr=False)
+    _writeup_task: asyncio.Task[str] | None = field(default=None, init=False, repr=False)
+    _writeup_cancelled: bool = field(default=False, init=False, repr=False)
 
     def _create_solver(self, model_spec: str):
         """Create the right solver type based on provider.
@@ -208,7 +218,12 @@ class ChallengeSwarm:
             logger.error(f"[{self.meta.name}/{model_spec}] Fatal: {e}", exc_info=True)
             return None
         finally:
-            await solver.stop()
+            retain_winner = (
+                self.writeup
+                and solver is self._winner_solver
+            )
+            if not retain_winner:
+                await solver.stop()
 
     async def _run_solver_loop(self, solver, model_spec: str) -> tuple[SolverResult, SolverProtocol]:
         """Inner loop: start → run → bump → run → ..."""
@@ -233,8 +248,17 @@ class ChallengeSwarm:
                 await self.message_bus.post(model_spec, result.findings_summary[:500])
 
             if result.status == FLAG_FOUND:
-                self.cancel_event.set()
-                self.winner = result
+                if self.winner is None:
+                    self.cancel_event.set()
+                    self.winner = result
+                    self._winner_solver = solver
+                    self._winner_model_spec = model_spec
+                    self.writeup_in_progress = self.writeup
+                    if self.on_winner:
+                        try:
+                            self.on_winner(result)
+                        except Exception as e:
+                            logger.warning("Winner announcement failed: %s", e)
                 logger.info(
                     f"[{self.meta.name}] Flag found by {model_spec}: {result.flag}"
                 )
@@ -330,28 +354,127 @@ class ChallengeSwarm:
 
         return result, solver
 
+    def _writeup_prompt(self) -> str:
+        verification = (
+            "The run used --no-submit, so clearly label the flag as unverified by CTFd."
+            if self.no_submit
+            else "The flag was accepted by CTFd; state that it was verified."
+        )
+        return f"""\
+You are the winning solver for the CTF challenge {self.meta.name!r}. Write a standalone,
+detailed Markdown writeup using your existing conversation, commands, tool results, and files
+in the still-running sandbox. The recovered flag was {self.winner.flag if self.winner else 'unknown'}.
+{verification}
+
+Include:
+- a concise challenge summary and attack overview;
+- the root cause and why the vulnerability or weakness is exploitable;
+- chronological reproduction steps with exact commands, requests, payloads, and relevant code;
+- how access was escalated or chained, when applicable;
+- how the flag was retrieved and verified;
+- useful failed approaches or diagnostic observations, without padding;
+- practical remediation guidance.
+
+Make the writeup reproducible by another player. Do not submit the flag again. Return only the
+complete Markdown document; do not wrap the whole document in a Markdown code fence.
+"""
+
+    async def _generate_winner_writeup(self) -> None:
+        solver = self._winner_solver
+        if not self.writeup or not solver or not self.winner or self._writeup_cancelled:
+            return
+
+        self.writeup_in_progress = True
+        tracer = getattr(solver, "tracer", None)
+        if tracer:
+            tracer.event(
+                "writeup_start",
+                model=self._winner_model_spec,
+                timeout_seconds=self.writeup_timeout_seconds,
+            )
+        logger.info(
+            "[%s/%s] Generating winner writeup",
+            self.meta.name,
+            self._winner_model_spec,
+        )
+
+        try:
+            self._writeup_task = asyncio.create_task(
+                solver.generate_writeup(self._writeup_prompt()),
+                name=f"writeup-{self._winner_model_spec}",
+            )
+            writeup = await asyncio.wait_for(
+                self._writeup_task,
+                timeout=self.writeup_timeout_seconds,
+            )
+            if not writeup.strip():
+                raise RuntimeError("winner returned an empty writeup")
+
+            path = Path(self.challenge_dir) / "writeup.md"
+            path.write_text(writeup.rstrip() + "\n", encoding="utf-8")
+            self.writeup_path = str(path.resolve())
+            if tracer:
+                tracer.event(
+                    "writeup_complete",
+                    path=self.writeup_path,
+                    bytes=len(writeup.encode("utf-8")),
+                )
+            logger.info("[%s] Writeup saved to %s", self.meta.name, self.writeup_path)
+        except TimeoutError:
+            if tracer:
+                tracer.event("writeup_failed", error="timeout")
+            logger.error(
+                "[%s/%s] Writeup timed out after %.0fs",
+                self.meta.name,
+                self._winner_model_spec,
+                self.writeup_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            if tracer:
+                tracer.event("writeup_failed", error="cancelled")
+            logger.info("[%s/%s] Writeup cancelled", self.meta.name, self._winner_model_spec)
+        except Exception as e:
+            if tracer:
+                tracer.event("writeup_failed", error=str(e))
+            logger.error(
+                "[%s/%s] Writeup failed: %s",
+                self.meta.name,
+                self._winner_model_spec,
+                e,
+                exc_info=True,
+            )
+        finally:
+            self._writeup_task = None
+            self.writeup_in_progress = False
+
     async def run(self) -> SolverResult | None:
         """Run all solvers in parallel. Returns the winner's result or None."""
         tasks = [
             asyncio.create_task(self._run_solver(spec), name=f"solver-{spec}")
             for spec in self.model_specs
         ]
-
         try:
             while tasks:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
+                flag_found = False
                 for task in done:
                     try:
                         result = task.result()
+                    except asyncio.CancelledError:
+                        continue
                     except Exception:
                         continue
                     if result and result.status == FLAG_FOUND:
-                        self.cancel_event.set()
-                        for p in pending:
-                            p.cancel()
-                        await asyncio.gather(*pending, return_exceptions=True)
-                        return result
+                        flag_found = True
+
+                if flag_found:
+                    self.cancel_event.set()
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    await self._generate_winner_writeup()
+                    return self.winner
 
                 tasks = list(pending)
 
@@ -364,10 +487,18 @@ class ChallengeSwarm:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             return None
+        finally:
+            self.writeup_in_progress = False
+            if self._winner_solver and self.writeup:
+                await self._winner_solver.stop()
+                self._winner_solver = None
 
     def kill(self) -> None:
         """Cancel all agents for this challenge."""
+        self._writeup_cancelled = True
         self.cancel_event.set()
+        if self._writeup_task:
+            self._writeup_task.cancel()
 
     def get_status(self) -> dict:
         """Get per-agent progress and findings."""
@@ -375,6 +506,11 @@ class ChallengeSwarm:
             "challenge": self.meta.name,
             "cancelled": self.cancel_event.is_set(),
             "winner": self.winner.flag if self.winner else None,
+            "writeup": (
+                "generating"
+                if self.writeup_in_progress
+                else self.writeup_path
+            ),
             "agents": {
                 spec: {
                     "findings": self.findings.get(spec, ""),

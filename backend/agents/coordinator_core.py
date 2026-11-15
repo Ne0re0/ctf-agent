@@ -41,7 +41,7 @@ async def do_spawn_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
     # Retire ALL finished swarms before checking capacity
     finished = [
         name for name, swarm in deps.swarms.items()
-        if swarm.cancel_event.is_set()
+        if (swarm.cancel_event.is_set() and not swarm.writeup_in_progress)
         or (name in deps.swarm_tasks and deps.swarm_tasks[name].done())
     ]
     for name in finished:
@@ -76,6 +76,7 @@ async def do_spawn_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
         settings=deps.settings,
         model_specs=deps.model_specs,
         no_submit=deps.no_submit,
+        writeup=deps.writeup,
         coordinator_inbox=deps.coordinator_inbox,
     )
     deps.swarms[challenge_name] = swarm
@@ -87,6 +88,7 @@ async def do_spawn_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
             deps.results[challenge_name] = {
                 "flag": result.flag,
                 "submit": "DRY RUN" if deps.no_submit else "confirmed by solver",
+                "writeup": swarm.writeup_path,
             }
 
     task = asyncio.create_task(_run_and_cleanup(), name=f"swarm-{challenge_name}")
