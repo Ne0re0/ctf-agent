@@ -16,6 +16,8 @@ import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from backend.output_types import is_placeholder_flag
+
 logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[[str, dict], Awaitable[dict]]
@@ -104,10 +106,14 @@ async def run_bridge_tool(solver: Any, name: str, args: dict) -> dict:
     if name == "submit_flag" and solver.no_submit:
         # Dry run: like the Claude backend, the first reported flag wins
         flag = str(args.get("flag", "")).strip()
-        solver._confirmed, solver._flag = True, flag
-        solver._findings = f"Flag found via submit_flag: {flag}"
-        solver.tracer.event("flag_confirmed", flag=flag, step=step, dry_run=True)
-        result: str | tuple[bytes, str] = f'DRY RUN — would submit "{flag}"'
+        result: str | tuple[bytes, str]
+        if is_placeholder_flag(flag):
+            result = f'"{flag}" is not a flag. Submit only the real flag, read from the target.'
+        else:
+            solver._confirmed, solver._flag = True, flag
+            solver._findings = f"Flag found via submit_flag: {flag}"
+            solver.tracer.event("flag_confirmed", flag=flag, step=step, dry_run=True)
+            result = f'DRY RUN — would submit "{flag}"'
     else:
         try:
             result = await exec_sandbox_tool(solver, name, args)

@@ -30,7 +30,12 @@ from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
 from backend.models import model_id_from_spec
-from backend.output_types import solver_output_json_schema, writeup_output_json_schema
+from backend.output_types import (
+    is_placeholder_flag,
+    reported_flag,
+    solver_output_json_schema,
+    writeup_output_json_schema,
+)
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
 from backend.solver_base import (
@@ -121,8 +126,9 @@ class ClaudeSolver:
     async def _submit_flag_command(self, flag: str, step: int) -> str:
         """Handle the synthetic submit_flag shell command and record confirmation."""
         if self.no_submit:
-            display = f'DRY RUN — would submit "{flag}"'
-            confirmed = True
+            confirmed = not is_placeholder_flag(flag)  # "NOT_FOUND" is not a flag
+            display = (f'DRY RUN — would submit "{flag}"' if confirmed
+                       else f'"{flag}" is not a flag. Submit only the real flag, read from the target.')
         elif self.submit_fn:
             display, confirmed = await self.submit_fn(flag)
         else:
@@ -358,11 +364,15 @@ class ClaudeSolver:
                 prompt = (
                     "Your previous attempt did not find the flag. "
                     f"Insights from other agents:\n\n{self._bump_insights}\n\n"
-                    "Try a different approach. Do NOT repeat what was tried."
+                    "Try a different approach. Do NOT repeat what was tried. "
+                    "Giving up is not allowed: do not answer until you hold the real flag."
                 )
                 self._bump_insights = None
             elif self._session_id:
-                prompt = "Continue solving. Try a different approach."
+                prompt = (
+                    "Continue solving. Try a different approach. "
+                    "Giving up is not allowed: do not answer until you hold the real flag."
+                )
             else:
                 prompt = "Solve this CTF challenge."
 
@@ -409,11 +419,16 @@ class ClaudeSolver:
                         self._sync_reported_cost(message.total_cost_usd)
 
                     output = getattr(message, "structured_output", None)
-                    if output and output.get("type") == "flag_found":
-                        self._flag = output.get("flag")
+                    if flag := reported_flag(output):
+                        self._flag = flag
                         self._findings = f"Flag found via {output.get('method', '?')}: {self._flag}"
                         if self.no_submit:
                             self._confirmed = True
+                    elif isinstance(output, dict) and not self._confirmed:
+                        # "NOT_FOUND" as the flag: not a solve, the swarm relaunches this solver
+                        self.tracer.event("no_flag", reported=str(output.get("flag", ""))[:200])
+                        if output.get("method"):
+                            self._findings = str(output["method"])[:2000]
 
             self.tracer.event("turn_complete", duration=round(time.monotonic() - t0, 1), cost=round(self._cost_usd, 4))
 

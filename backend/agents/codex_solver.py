@@ -25,7 +25,11 @@ from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
 from backend.models import model_id_from_spec, supports_vision
-from backend.output_types import solver_output_json_schema, writeup_output_json_schema
+from backend.output_types import (
+    reported_flag,
+    solver_output_json_schema,
+    writeup_output_json_schema,
+)
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
 from backend.solver_base import (
@@ -492,13 +496,15 @@ class CodexSolver:
             prompt_text = (
                 "Your previous attempt did not find the flag. "
                 f"Insights from other agents:\n\n{self._bump_insights}\n\n"
-                "Try a different approach."
+                "Try a different approach. Giving up is not allowed: do not answer until you hold the real flag."
             )
             self._bump_insights = None
         elif self._step_count == 0:
             prompt_text = "Solve this CTF challenge."
         else:
-            prompt_text = "Continue solving. Try a different approach."
+            prompt_text = (
+                "Continue solving. Try a different approach. Giving up is not allowed: do not answer until you hold the real flag."
+            )
 
         try:
             self._turn_done.clear()
@@ -528,11 +534,14 @@ class CodexSolver:
                 return self._result(ERROR)
 
             if self._structured_output:
-                if self._structured_output.get("type") == "flag_found":
-                    self._flag = self._structured_output.get("flag")
+                if flag := reported_flag(self._structured_output):
+                    self._flag = flag
                     self._findings = f"Flag found via {self._structured_output.get('method', '?')}: {self._flag}"
                     if self.no_submit:
                         self._confirmed = True
+                elif not self._confirmed and self._structured_output.get("method"):
+                    # "NOT_FOUND" as the flag: not a solve, the swarm relaunches this solver
+                    self._findings = str(self._structured_output["method"])[:2000]
 
             if self._confirmed and self._flag:
                 return self._result(FLAG_FOUND)
