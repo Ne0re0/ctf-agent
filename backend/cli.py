@@ -40,10 +40,16 @@ class ModelsCommand(click.Command):
                 settings = Settings()
                 claude_cli = _option_value(args, "--claude-cli")
                 codex_cli = _option_value(args, "--codex-cli")
+                grok_cli = _option_value(args, "--grok-cli")
+                omp_cli = _option_value(args, "--omp-cli")
                 if claude_cli:
                     settings.claude_cli = claude_cli
                 if codex_cli:
                     settings.codex_cli = codex_cli
+                if grok_cli:
+                    settings.grok_cli = grok_cli
+                if omp_cli:
+                    settings.omp_cli = omp_cli
                 click.echo(render_available_models(settings))
                 ctx.exit()
         return super().parse_args(ctx, args)
@@ -73,6 +79,8 @@ def _setup_logging(verbose: bool = False) -> None:
     help="Model spec (repeat to race several); omit the value to list available models",
 )
 @click.option("--challenge", default=None, help="Solve a single challenge directory")
+@click.option("--description", default=None, help="Challenge statement (overrides metadata.yml / README)")
+@click.option("--connection-info", default=None, help="Service to attack, e.g. 'nc host 1337' (overrides metadata.yml)")
 @click.option("--challenges-dir", default="challenges", help="Directory for challenge files")
 @click.option("--no-submit", is_flag=True, help="Dry run — don't submit flags")
 @click.option(
@@ -91,6 +99,8 @@ def _setup_logging(verbose: bool = False) -> None:
 @click.option("--msg-port", default=0, type=int, help="Operator message port (0 = auto)")
 @click.option("--claude-cli", default=None, help="Claude Code command or path (overrides CLAUDE_CLI, default: claude)")
 @click.option("--codex-cli", default=None, help="Codex command or path (overrides CODEX_CLI, default: codex)")
+@click.option("--grok-cli", default=None, help="Grok Build command or path (overrides GROK_CLI, default: grok)")
+@click.option("--omp-cli", default=None, help="oh-my-pi command or path (overrides OMP_CLI, default: omp)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
 def main(
     ctfd_url: str | None,
@@ -98,6 +108,8 @@ def main(
     image: str,
     models: tuple[str, ...],
     challenge: str | None,
+    description: str | None,
+    connection_info: str | None,
     challenges_dir: str,
     no_submit: bool,
     writeup: bool,
@@ -108,6 +120,8 @@ def main(
     msg_port: int,
     claude_cli: str | None,
     codex_cli: str | None,
+    grok_cli: str | None,
+    omp_cli: str | None,
     verbose: bool,
 ) -> None:
     """CTF Agent — multi-model solver swarm.
@@ -125,6 +139,10 @@ def main(
         settings.claude_cli = claude_cli
     if codex_cli:
         settings.codex_cli = codex_cli
+    if grok_cli:
+        settings.grok_cli = grok_cli
+    if omp_cli:
+        settings.omp_cli = omp_cli
     settings.max_concurrent_challenges = max_challenges
 
     model_specs = list(models) if models else list(DEFAULT_MODELS)
@@ -141,6 +159,8 @@ def main(
     for provider, setting, command in (
         ("claude-sdk", "CLAUDE_CLI", settings.claude_cli),
         ("codex", "CODEX_CLI", settings.codex_cli),
+        ("grok", "GROK_CLI", settings.grok_cli),
+        ("omp", "OMP_CLI", settings.omp_cli),
     ):
         if provider in providers:
             try:
@@ -173,6 +193,8 @@ def main(
                 msg_port,
                 benchmark,
                 writeup,
+                description=description,
+                connection_info=connection_info,
             )
         )
     else:
@@ -200,12 +222,14 @@ async def _run_single(
     msg_port: int = 0,
     benchmark: bool = False,
     writeup: bool = False,
+    description: str | None = None,
+    connection_info: str | None = None,
 ) -> None:
     """Run a single challenge with a swarm."""
     from backend.agents.swarm import ChallengeSwarm
     from backend.cost_tracker import CostTracker
     from backend.ctfd import CTFdClient
-    from backend.prompts import ChallengeMeta
+    from backend.prompts import ChallengeMeta, list_distfiles
     from backend.sandbox import cleanup_orphan_containers, configure_semaphore
 
     max_containers = max_challenges * len(model_specs)
@@ -218,7 +242,14 @@ async def _run_single(
         sys.exit(1)
 
     meta = ChallengeMeta.load_or_create(challenge_path)
-    console.print(f"[bold]Challenge:[/bold] {meta.name} ({meta.category}, {meta.value} pts)")
+    if description:
+        meta.description = description
+    if connection_info:
+        meta.connection_info = connection_info
+    console.print(f"[bold]Challenge:[/bold] {meta.name} ({meta.category or 'no category'}, {meta.value} pts)")
+    if not (challenge_path / "distfiles").exists():
+        files = list_distfiles(str(challenge_path))
+        console.print(f"  No distfiles/: {len(files)} file(s) handed out from {challenge_path}")
 
     ctfd = CTFdClient(
         base_url=settings.ctfd_url,

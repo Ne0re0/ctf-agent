@@ -19,6 +19,8 @@ PROVIDER_MAP: dict[str, str] = {
     "zen": "openai",
     "codex": "openai",
     "google": "google",
+    "xai": "x-ai",
+    "grok": "x-ai",
 }
 
 # Fallback pricing for models not in genai-prices (per 1M tokens, USD)

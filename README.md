@@ -69,7 +69,9 @@ There are two ways to run it:
 - At least one solver backend:
   - the `claude` CLI (Claude Code), logged in, for `claude-sdk/*` models and the Claude coordinator
   - the `codex` CLI, logged in, for `codex/*` models and the Codex coordinator
-  - or API credentials for the API-backed providers (Bedrock, Azure OpenAI, OpenCode Zen, Google)
+  - the `grok` CLI (Grok Build), logged in, for `grok/*` models
+  - the `omp` CLI ([oh-my-pi](https://github.com/can1357/oh-my-pi)), with any provider it is set up for, for `omp/*` models
+  - or API credentials for the API-backed providers (Bedrock, Azure OpenAI, OpenCode Zen, Google, xAI)
 - A CTFd account or API token, only for competition mode or to submit flags for real
 
 ## Installation
@@ -114,6 +116,8 @@ If `docker` only works with `sudo`, add yourself to the `docker` group and log i
 sudo usermod -aG docker "$USER"
 ```
 
+The group change only applies to new sessions: log out and back in (or run `newgrp docker`).
+
 ### 4. Log in to Claude Code and/or Codex
 
 ```bash
@@ -125,8 +129,16 @@ codex login
 ```
 
 The `claude-sdk/*` and `codex/*` solvers run these commands themselves, so they use the same
-logins, settings and proxies as your terminal. No API key is needed. If `claude` is a shell
+logins, settings and proxies as your terminal. No API key is needed.
+
+`grok/*` and `omp/*` work the same way with the `grok` and `omp` commands: log in with
+`grok login` (a Grok subscription works), and set up omp's providers as usual
+(`~/.omp/agent/models.yml`, its logins, or provider API keys in your environment). If `claude` is a shell
 alias or a wrapper on your machine, see [Claude and Codex commands](#claude-and-codex-commands).
+
+With a wrapper such as `ourclaude` (installing it logs the default `claude` CLI out), set
+`CLAUDE_CLI=/usr/local/bin/ourclaude` in `~/.config/ctf-agent/config.env`. To remove it:
+`rm /usr/local/bin/ourclaude ~/.claude/proxy.json`.
 
 ### 5. (Optional) Run `ctf-solve` from any directory
 
@@ -136,6 +148,7 @@ Link the venv's commands into a directory on your `PATH`:
 mkdir -p ~/.local/bin
 ln -s "$PWD/.venv/bin/ctf-solve" ~/.local/bin/ctf-solve
 ln -s "$PWD/.venv/bin/ctf-msg" ~/.local/bin/ctf-msg
+ln -s "$PWD/.venv/bin/ctf-watch" ~/.local/bin/ctf-watch
 ```
 
 Then put your settings in `~/.config/ctf-agent/config.env` (see [Configuration](#configuration))
@@ -149,7 +162,9 @@ ctf-solve --models
 ```
 
 This prints the default solver lineup, the Claude models your configured CLI and local Claude
-Code catalog advertise, gateway models when `CLAUDE_CLI=ourclaude`, and the Codex models your account can use. A section that says
+Code catalog advertise, gateway models when `CLAUDE_CLI=ourclaude`, the Codex models your account
+can use, the models `grok models` lists for your login, and the models `omp models` can reach.
+A section that says
 `unavailable (...)` means that CLI isn't installed, isn't on `PATH`, or couldn't be queried.
 
 ## Solving a local challenge
@@ -162,8 +177,10 @@ my-chall/
 └── distfiles/       # optional: the files handed out with the challenge
 ```
 
-If `metadata.yml` is absent, `ctf-solve` creates one using the directory name and the
-description `Find the flag.`. This works with both `--challenge` and directories preloaded
+If `metadata.yml` is absent, `ctf-solve` creates one using the directory name and, as
+description, the first statement file found (`description.md`, `description.txt`, `README.md`,
+`README.txt`, `README`, `enonce.md`, `enonce.txt`, `challenge.md`, `challenge.txt`), or
+`Find the flag.` when there is none. This works with both `--challenge` and directories preloaded
 from `--challenges-dir`. For live submission, make sure the directory name exactly matches
 the CTFd challenge name, or provide an explicit `name` in `metadata.yml`.
 
@@ -188,15 +205,24 @@ Inside each sandbox, `distfiles/` is mounted read-only at `/challenge/distfiles/
 `/challenge/workspace/`. Docker container names include the challenge and model names,
 followed by a unique suffix so concurrent runs do not collide.
 
-Only files under `distfiles/` are exposed to the solver container. Put downloadable source,
-binaries, archives, and other challenge inputs there; files elsewhere in the challenge directory
-are not mounted. A web challenge can omit `distfiles/` when `connection_info` points to a reachable
+When the challenge has a `distfiles/` folder, only its files are exposed to the solver
+container. Without `distfiles/`, the challenge folder's own files are handed out instead
+(hidden files and `metadata.yml` excluded from the listing). A web challenge can omit `distfiles/` when `connection_info` points to a reachable
 service and black-box testing is sufficient.
 
 **Services on your machine:** `localhost` and `127.0.0.1` in `connection_info` are rewritten to
 `host.docker.internal`, which the sandboxes resolve to your host. The service must listen on an
 address the containers can reach (`0.0.0.0` or a Docker-published port, e.g.
 `docker run -p 1337:1337 ...`), not only on `127.0.0.1`.
+
+### Overriding the statement
+
+`--description "..."` and `--connection-info "nc host 1337"` set or override the statement
+and the service (they also override `metadata.yml`):
+
+```bash
+ctf-solve --challenge ./crackme-folder --no-submit --description "Find the password. Flag format: FLAG{...}"
+```
 
 ### Run it
 
@@ -262,6 +288,21 @@ Without `--no-submit`, the first accepted flag is verified by CTFd and later sub
 checked locally against that confirmed flag. With `--no-submit`, reported flags cannot be
 verified, just like an ordinary dry run. `--benchmark` currently requires `--challenge`.
 
+## Pulling challenges from any platform
+
+For a platform that is not CTFd, `pull.sh` runs a headless Claude Code agent that finds the
+platform's API and downloads every challenge into `challenges/<slug>/` (`metadata.yml` +
+`distfiles/`). It never submits flags or starts instances.
+
+```bash
+PLATFORM_COOKIE='session=...' ./pull.sh https://ctf.example.com            # once
+PLATFORM_COOKIE='session=...' ./pull.sh https://ctf.example.com --loop 300 # every 5 min
+for d in challenges/*/; do ctf-solve --challenge "$d" --no-submit; done
+```
+
+`PLATFORM_COOKIE` is the `Cookie` header copied from your browser. It goes into a temporary
+curl config, never into the agent's prompt. Already pulled challenges are skipped.
+
 ## Competition mode (CTFd)
 
 ```bash
@@ -320,11 +361,41 @@ A solver is selected by a spec `provider/model[/effort]`:
 | `azure` | `azure/gpt-5.4` | Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
 | `zen` | `zen/gpt-5.3-codex-spark` | OpenCode Zen | `OPENCODE_ZEN_API_KEY` |
 | `google` | `google/gemini-3-flash-preview` | Google AI Studio | `GEMINI_API_KEY` |
+| `grok` | `grok/grok-4.6/high` | your `grok` CLI (Grok Build) | Grok login (subscription) |
+| `xai` | `xai/grok-4-1-fast-reasoning` | xAI API | `XAI_API_KEY` |
+| `omp` | `omp/anthropic/claude-opus-4-6/high` | your `omp` CLI (oh-my-pi) | whatever omp is set up with |
 
-**Effort** (third part) is `low`, `medium`, `high` or `max`, and is passed to the `claude` CLI
+**Effort** (third part) is `low`, `medium`, `high`, `xhigh` or `max`, and is passed to the `claude` CLI
 for `claude-sdk` specs. Any other value is ignored and the model's default effort is used.
 Codex ignores the suffix: its reasoning effort is set per model in `REASONING_EFFORT` in
 `backend/agents/codex_solver.py`.
+
+For `grok/*`, the suffix is passed to `grok --effort` as is. For `omp/*`, everything after
+`omp/` is omp's own model reference (it often contains a slash, e.g.
+`omp/orcarouter/deepseek/deepseek-v4.1-flash`), and a last segment of `off`, `minimal`, `low`,
+`medium`, `high`, `xhigh` or `max` becomes `omp --thinking`.
+
+#### How the Grok and omp backends stay in the sandbox
+
+Both CLIs run with their own host-side tools turned off and get ctf-agent's sandbox tools
+instead (the same set as Codex: `bash`, `read_file`, `write_file`, `submit_flag`, ...). Each
+call goes back to `ctf-solve` over a local HTTP bridge (127.0.0.1, per-solver token), which
+runs it in the challenge's container.
+
+- **grok:** `grok -p` per turn (later turns resume the session), with every host tool removed
+  (`--disallowed-tools`, plus `--deny` rules as a backstop). The tools come from a stdio MCP
+  server (`backend/agents/grok_mcp_bridge.py`) declared in a throwaway `.grok/config.toml`;
+  the model calls them as `ctf__bash`, ... Grok keeps `web_search`/`web_fetch`. If grok ever
+  offers a host tool ctf-agent does not know, the turn stops with an error naming it; add it to
+  `DISALLOWED_TOOLS` in `backend/agents/grok_solver.py`.
+- **omp:** one long-lived `omp --mode rpc` per solver with `--tools` limited to the sandbox
+  tools, which the extension `backend/agents/omp_bridge.ts` registers. Extensions, skills,
+  rules and LSP of your omp setup are not loaded.
+
+With these two backends, only a `submit_flag` call counts as finding the flag (in
+`--no-submit` too); a flag the model merely states in its answer is kept as a finding.
+Costs are the ones each CLI reports: omp reports $0 for models without prices in its
+catalog (e.g. a custom `models.yml` entry).
 
 A ChatGPT-login Codex only accepts the models your account lists; older ids such
 as `gpt-5.4` are rejected. Use the ids that `ctf-solve --models` prints.
@@ -403,15 +474,20 @@ mkdir -p ~/.config/ctf-agent && cp .env.example ~/.config/ctf-agent/config.env
 | `CTFD_USER` / `CTFD_PASS` | `admin` / `admin` | CTFd login when no token is set |
 | `CLAUDE_CLI` | `claude` | command behind `claude-sdk/*` and the Claude coordinator (`--claude-cli`) |
 | `CODEX_CLI` | `codex` | command behind `codex/*` and the Codex coordinator (`--codex-cli`) |
+| `GROK_CLI` | `grok` | command behind `grok/*` (`--grok-cli`) |
+| `OMP_CLI` | `omp` | command behind `omp/*` (`--omp-cli`) |
 | `CONTAINER_MEMORY_LIMIT` | `16g` | memory cap of each sandbox container |
+| `CTF_LOGS_DIR` | `./logs` | where solvers write traces and `ctf-watch` reads them; environment variable only (not `config.env`), e.g. `export CTF_LOGS_DIR=~/ctf-agent/logs` in your shell rc so every run shares one folder |
 | `AWS_REGION` | `us-east-1` | `bedrock/*` |
 | `AWS_BEARER_TOKEN` | | `bedrock/*` (otherwise your default AWS credentials) |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` | | `azure/*` |
 | `OPENCODE_ZEN_API_KEY` | | `zen/*` |
 | `GEMINI_API_KEY` | | `google/*` |
+| `XAI_API_KEY` | | `xai/*` (also read by `grok`/`omp` themselves when they use an xAI key) |
 
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env.example` are not read by ctf-agent itself:
-the `claude` and `codex` CLIs use their own logins (and see your shell environment as usual).
+Every line of `.env.example` is commented out: uncomment only what you use, since a placeholder
+left active (e.g. `CTFD_TOKEN`) would be used for real. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
+are not read by ctf-agent: the `claude` and `codex` CLIs use their own logins.
 The sandbox image and concurrency are set with `--image` and `--max-challenges`.
 
 ### Claude and Codex commands
@@ -423,11 +499,13 @@ so they use the same logins, settings and proxies as your terminal.
 # ~/.config/ctf-agent/config.env
 CLAUDE_CLI=claude   # command on PATH or a path
 CODEX_CLI=codex
+GROK_CLI=grok
+OMP_CLI=omp
 ```
 
 Shell aliases are invisible to programs: if `claude` is an alias for a wrapper
 (e.g. one that sets `ANTHROPIC_BASE_URL`), set `CLAUDE_CLI` to that wrapper. A
-one-off override is `--claude-cli` / `--codex-cli`. The resolved commands are
+one-off override is `--claude-cli` / `--codex-cli` / `--grok-cli` / `--omp-cli`. The resolved commands are
 printed at startup, and a command that can't be found stops the run with the setting to fix.
 
 For OurClaude, set `CLAUDE_CLI=ourclaude` and update the installed wrapper with
@@ -458,6 +536,8 @@ rate limits.
 | `--image NAME` | `ctf-sandbox` | Sandbox Docker image |
 | `--claude-cli CMD` | `CLAUDE_CLI` | Claude Code command or path |
 | `--codex-cli CMD` | `CODEX_CLI` | Codex command or path |
+| `--grok-cli CMD` | `GROK_CLI` | Grok Build command or path |
+| `--omp-cli CMD` | `OMP_CLI` | oh-my-pi command or path |
 | `--msg-port N` | `0` (random free port) | Port for operator messages |
 | `-v`, `--verbose` | off | Debug logging |
 
@@ -466,11 +546,31 @@ rate limits.
 
 ## Watching and talking to solvers
 
+### ctf-watch
+
+`ctf-watch` reads the traces in `./logs/` (run it where `ctf-solve` runs, or pass `--logs`)
+and shows the sessions live, in colour:
+
+```bash
+ctf-watch                       # interactive browser: challenges > runs > agents
+ctf-watch baby-rsa              # every agent of the latest run of baby-rsa, interleaved
+ctf-watch baby-rsa grok         # grok's session as its terminal: prompt, commands, outputs
+ctf-watch baby-rsa claude --run 2 --full --no-follow   # an older run, whole outputs, no follow
+ctf-watch --plain               # live dashboard without interaction (e.g. over a pipe)
+```
+
+In the browser, the arrow keys move through the tree: a run shows all its agents
+interleaved, an agent shows its terminal. `t` hides/shows the agents' messages, `o` toggles
+full outputs, `f` stops/resumes following, `g` jumps to the latest run, `q` quits. Traces keep
+at most 2000 characters per command and output.
+
 - **Traces:** `./logs/trace-<challenge>-<model>-<time>.jsonl` (in the directory you ran from)
   records each solver's messages (`model_response`), tool calls and results, delivered
   findings and its session id (`session`).
 - **Full transcripts:** the CLIs keep their own. Claude: `~/.claude/projects/<run dir>/<session>.jsonl`,
-  Codex: `~/.codex/sessions/<date>/rollout-*-<thread>.jsonl`. The ids are logged at startup.
+  Codex: `~/.codex/sessions/<date>/rollout-*-<thread>.jsonl`, Grok: `grok sessions`,
+  omp: `~/.omp/agent/sessions/`. The ids are logged at startup. The stderr of `grok` and
+  `omp` goes to `<trace>.grok-stderr.log` / `<trace>.omp-stderr.log` next to the trace.
   After a run, `<CLAUDE_CLI> --resume <session>` (from the same directory) or
   `codex resume <thread>` reopens the conversation interactively. Tools then run on
   your machine, not in the sandbox, so don't let them execute challenge files.
@@ -482,7 +582,7 @@ rate limits.
 Separate `ctf-solve --challenge ...` processes can run side by side. Each sandbox
 container is labelled with the process that created it, and a starting run only
 removes containers whose process is gone. Each run gets its own message port.
-All runs share your Claude/Codex quotas and the Docker host's memory.
+All runs share your Claude/Codex/Grok quotas and the Docker host's memory.
 
 ```bash
 for d in ./challs/rsa-1 ./challs/heap-2; do

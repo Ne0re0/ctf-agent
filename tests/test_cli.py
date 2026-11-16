@@ -53,6 +53,7 @@ def test_valued_models_remains_repeatable(monkeypatch):
         msg_port,
         benchmark,
         writeup,
+        **kwargs,
     ):
         captured["models"] = model_specs
         captured["benchmark"] = benchmark
@@ -93,6 +94,7 @@ def test_benchmark_is_forwarded_to_single_challenge(monkeypatch):
         msg_port,
         benchmark,
         writeup,
+        **kwargs,
     ):
         captured["challenge"] = challenge
         captured["models"] = model_specs
@@ -140,6 +142,7 @@ def test_writeup_is_forwarded_to_single_challenge(monkeypatch):
         msg_port,
         benchmark,
         writeup,
+        **kwargs,
     ):
         captured["challenge"] = challenge
         captured["writeup"] = writeup

@@ -19,6 +19,8 @@ from typing import Any
 
 import aiodocker
 
+from backend.prompts import distfiles_dir
+
 logger = logging.getLogger(__name__)
 
 CONTAINER_LABEL = "ctf-agent"
@@ -200,7 +202,7 @@ class DockerSandbox:
             self.workspace_dir = tempfile.mkdtemp(prefix="ctf-workspace-")
 
             challenge_root = Path(self.challenge_dir).resolve()
-            distfiles = str(challenge_root / "distfiles")
+            distfiles = str(distfiles_dir(challenge_root))
             meta_yml = str(challenge_root / "metadata.yml")
 
             binds: list[str] = [f"{self.workspace_dir}:/challenge/workspace:rw"]

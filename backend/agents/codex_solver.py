@@ -126,6 +126,49 @@ SANDBOX_TOOLS = [
 ]
 
 
+async def exec_sandbox_tool(solver: Any, name: str, args: dict) -> str | tuple[bytes, str]:
+    """Run one SANDBOX_TOOLS call for a solver (Codex, omp).
+
+    Uses solver.sandbox, no_submit, submit_fn, ctfd, meta, use_vision and
+    notify_coordinator, and sets solver._confirmed/_flag on a confirmed flag.
+    """
+    if name == "bash":
+        return await do_bash(solver.sandbox, args.get("command", ""), args.get("timeout_seconds", 60))
+    elif name == "read_file":
+        return str(await do_read_file(solver.sandbox, args.get("path", "")))
+    elif name == "write_file":
+        return await do_write_file(solver.sandbox, args.get("path", ""), args.get("content", ""))
+    elif name == "list_files":
+        return await do_list_files(solver.sandbox, args.get("path", "/challenge/distfiles"))
+    elif name == "submit_flag":
+        flag = args.get("flag", "")
+        if solver.no_submit:
+            return f'DRY RUN — would submit "{flag}"'
+        if solver.submit_fn:
+            display, is_confirmed = await solver.submit_fn(flag)
+        else:
+            from backend.tools.core import do_submit_flag
+            display, is_confirmed = await do_submit_flag(solver.ctfd, solver.meta.name, flag)
+        if is_confirmed:
+            solver._confirmed = True
+            solver._flag = flag
+        return display
+    elif name == "web_fetch":
+        return await do_web_fetch(args.get("url", ""), args.get("method", "GET"), args.get("body", ""))
+    elif name == "webhook_create":
+        return await do_webhook_create()
+    elif name == "webhook_get_requests":
+        return await do_webhook_get_requests(args.get("uuid", ""))
+    elif name == "view_image":
+        return await do_view_image(solver.sandbox, args.get("filename", ""), use_vision=solver.use_vision)
+    elif name == "notify_coordinator":
+        if solver.notify_coordinator:
+            await solver.notify_coordinator(args.get("message", ""))
+            return "Message sent to coordinator."
+        return "No coordinator connected."
+    return f"Unknown tool: {name}"
+
+
 class CodexSolver:
     """Codex solver speaking the actual app-server JSON-RPC 2.0 protocol."""
 
@@ -437,41 +480,7 @@ class CodexSolver:
         })
 
     async def _exec_tool(self, name: str, args: dict) -> str | tuple[bytes, str]:
-        if name == "bash":
-            return await do_bash(self.sandbox, args.get("command", ""), args.get("timeout_seconds", 60))
-        elif name == "read_file":
-            return str(await do_read_file(self.sandbox, args.get("path", "")))
-        elif name == "write_file":
-            return await do_write_file(self.sandbox, args.get("path", ""), args.get("content", ""))
-        elif name == "list_files":
-            return await do_list_files(self.sandbox, args.get("path", "/challenge/distfiles"))
-        elif name == "submit_flag":
-            flag = args.get("flag", "")
-            if self.no_submit:
-                return f'DRY RUN — would submit "{flag}"'
-            if self.submit_fn:
-                display, is_confirmed = await self.submit_fn(flag)
-            else:
-                from backend.tools.core import do_submit_flag
-                display, is_confirmed = await do_submit_flag(self.ctfd, self.meta.name, flag)
-            if is_confirmed:
-                self._confirmed = True
-                self._flag = flag
-            return display
-        elif name == "web_fetch":
-            return await do_web_fetch(args.get("url", ""), args.get("method", "GET"), args.get("body", ""))
-        elif name == "webhook_create":
-            return await do_webhook_create()
-        elif name == "webhook_get_requests":
-            return await do_webhook_get_requests(args.get("uuid", ""))
-        elif name == "view_image":
-            return await do_view_image(self.sandbox, args.get("filename", ""), use_vision=self.use_vision)
-        elif name == "notify_coordinator":
-            if self.notify_coordinator:
-                await self.notify_coordinator(args.get("message", ""))
-                return "Message sent to coordinator."
-            return "No coordinator connected."
-        return f"Unknown tool: {name}"
+        return await exec_sandbox_tool(self, name, args)
 
     async def run_until_done_or_gave_up(self) -> SolverResult:
         if not self._proc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import time
 from pathlib import Path
 
@@ -15,7 +16,8 @@ def _sanitize(s: str) -> str:
 class SolverTracer:
     """Append-only JSONL event tracer. Flushes every write for tail -f streaming."""
 
-    def __init__(self, challenge_name: str, model_id: str, log_dir: str = "logs") -> None:
+    def __init__(self, challenge_name: str, model_id: str, log_dir: str | None = None) -> None:
+        log_dir = log_dir or os.environ.get("CTF_LOGS_DIR") or "logs"
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%d-%H%M%S")
         self.path = str(Path(log_dir) / f"trace-{_sanitize(challenge_name)}-{_sanitize(model_id)}-{ts}.jsonl")

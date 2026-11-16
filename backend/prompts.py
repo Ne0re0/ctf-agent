@@ -30,15 +30,20 @@ class ChallengeMeta:
 
     @classmethod
     def load_or_create(cls, challenge_dir: str | Path) -> ChallengeMeta:
-        """Load metadata.yml, creating a minimal fallback when it is absent."""
+        """Load metadata.yml, creating a minimal fallback when it is absent.
+
+        The fallback takes the folder name and, when present, the statement file
+        (README.md, description.txt, ...) as description.
+        """
         challenge_path = Path(challenge_dir)
         meta_path = challenge_path / "metadata.yml"
         if meta_path.exists():
             return cls.from_yaml(meta_path)
 
+        description = _read_statement(challenge_path) or DEFAULT_CHALLENGE_DESCRIPTION
         data = {
             "name": challenge_path.name,
-            "description": DEFAULT_CHALLENGE_DESCRIPTION,
+            "description": description,
         }
         meta_path.write_text(
             yaml.safe_dump(
@@ -52,7 +57,7 @@ class ChallengeMeta:
         logger.info("Generated default challenge metadata: %s", meta_path)
         return cls(
             name=challenge_path.name,
-            description=DEFAULT_CHALLENGE_DESCRIPTION,
+            description=description,
         )
 
     @classmethod
@@ -71,11 +76,44 @@ class ChallengeMeta:
         )
 
 
+# Statement files used as description when a challenge folder has no metadata.yml
+DESCRIPTION_FILES = (
+    "description.md", "description.txt", "README.md", "README.txt", "README",
+    "readme.md", "readme.txt", "enonce.md", "enonce.txt", "challenge.md", "challenge.txt",
+)
+
+
+def _read_statement(challenge_dir: Path) -> str:
+    """First statement file found in the folder or its distfiles/ (first match wins)."""
+    for name in DESCRIPTION_FILES:
+        for candidate in (challenge_dir / name, challenge_dir / "distfiles" / name):
+            if candidate.is_file():
+                text = candidate.read_text(errors="replace").strip()
+                if text:
+                    return text
+    return ""
+
+
+def distfiles_dir(challenge_dir: str | Path) -> Path:
+    """The folder mounted at /challenge/distfiles.
+
+    distfiles/ when the challenge has one; otherwise the challenge folder itself
+    is the set of files handed to the solvers.
+    """
+    root = Path(challenge_dir)
+    dist = root / "distfiles"
+    return dist if dist.exists() else root
+
+
 def list_distfiles(challenge_dir: str) -> list[str]:
-    dist = Path(challenge_dir) / "distfiles"
+    dist = distfiles_dir(challenge_dir)
     if not dist.exists():
         return []
-    return sorted(f.name for f in dist.iterdir() if f.is_file())
+    return sorted(
+        f.name
+        for f in dist.iterdir()
+        if f.is_file() and not f.name.startswith(".") and f.name != "metadata.yml"
+    )
 
 
 def _rewrite_connection_info(conn: str) -> str:
