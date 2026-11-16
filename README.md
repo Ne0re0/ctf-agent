@@ -249,7 +249,7 @@ ctf-solve --challenge ./my-chall --no-submit \
   -v
 ```
 
-While it runs you can watch the traces in `./logs/` and send hints with `ctf-msg`
+While it runs you can watch the traces in `/tmp/logs/` and send hints with `ctf-msg`
 (see [Watching and talking to solvers](#watching-and-talking-to-solvers)).
 
 ### Generate a winner writeup
@@ -477,7 +477,7 @@ mkdir -p ~/.config/ctf-agent && cp .env.example ~/.config/ctf-agent/config.env
 | `GROK_CLI` | `grok` | command behind `grok/*` (`--grok-cli`) |
 | `OMP_CLI` | `omp` | command behind `omp/*` (`--omp-cli`) |
 | `CONTAINER_MEMORY_LIMIT` | `16g` | memory cap of each sandbox container |
-| `CTF_LOGS_DIR` | `./logs` | where solvers write traces and `ctf-watch` reads them; environment variable only (not `config.env`), e.g. `export CTF_LOGS_DIR=~/ctf-agent/logs` in your shell rc so every run shares one folder |
+| `CTF_LOGS_DIR` | `/tmp/logs` | where solvers write traces and `ctf-watch` reads them, whatever the directory they run from; environment variable only (not `config.env`). `/tmp` is usually emptied at reboot: `export CTF_LOGS_DIR=~/ctf-agent/logs` in your shell rc keeps the traces |
 | `AWS_REGION` | `us-east-1` | `bedrock/*` |
 | `AWS_BEARER_TOKEN` | | `bedrock/*` (otherwise your default AWS credentials) |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` | | `azure/*` |
@@ -548,7 +548,7 @@ rate limits.
 
 ### ctf-watch
 
-`ctf-watch` reads the traces in `./logs/` (run it where `ctf-solve` runs, or pass `--logs`)
+`ctf-watch` reads the traces in `/tmp/logs/` (from any directory; `--logs` or `CTF_LOGS_DIR` for another folder)
 and shows the sessions live, in colour:
 
 ```bash
@@ -570,7 +570,7 @@ interleaved, an agent shows its terminal. `t` hides/shows the agents' messages, 
 full outputs, `f` stops/resumes following, `g` jumps to the latest run, `q` quits. Traces keep
 at most 2000 characters per command and output.
 
-- **Traces:** `./logs/trace-<challenge>-<model>-<time>.jsonl` (in the directory you ran from)
+- **Traces:** `/tmp/logs/trace-<challenge>-<model>-<time>.jsonl`
   records each solver's messages (`model_response`), tool calls and results, delivered
   findings and its session id (`session`).
 - **Full transcripts:** the CLIs keep their own. Claude: `~/.claude/projects/<run dir>/<session>.jsonl`,

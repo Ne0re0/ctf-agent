@@ -9,6 +9,10 @@ import socket
 import time
 from pathlib import Path
 
+# Traces of every run, whatever the directory ctf-solve is started from, so ctf-watch
+# finds them without options. CTF_LOGS_DIR overrides it.
+DEFAULT_LOGS_DIR = "/tmp/logs"
+
 
 def _sanitize(s: str) -> str:
     return s.replace("/", "_").replace(" ", "_")
@@ -18,7 +22,7 @@ class SolverTracer:
     """Append-only JSONL event tracer. Flushes every write for tail -f streaming."""
 
     def __init__(self, challenge_name: str, model_id: str, log_dir: str | None = None) -> None:
-        log_dir = log_dir or os.environ.get("CTF_LOGS_DIR") or "logs"
+        log_dir = log_dir or os.environ.get("CTF_LOGS_DIR") or DEFAULT_LOGS_DIR
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%d-%H%M%S")
         self.path = str(Path(log_dir) / f"trace-{_sanitize(challenge_name)}-{_sanitize(model_id)}-{ts}.jsonl")

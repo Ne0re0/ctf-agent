@@ -1,6 +1,6 @@
 """ctf-watch — browse and follow solver sessions in the terminal, from their traces.
 
-Every solver appends JSONL events to ./logs/trace-<challenge>-<agent>-<time>.jsonl and
+Every solver appends JSONL events to /tmp/logs/trace-<challenge>-<agent>-<time>.jsonl and
 flushes each line, so this works live (next to a running ctf-solve) and afterwards.
 
   ctf-watch                    interactive browser (TUI): challenges > runs > agents
@@ -29,6 +29,8 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
+
+from backend.tracing import DEFAULT_LOGS_DIR
 
 console = Console(highlight=False)
 
@@ -520,8 +522,8 @@ def _follow(traces: list[Trace], render, follow: bool, logs: Path, challenge: st
 @click.argument("challenge", required=False)
 @click.argument("agent", required=False)
 @click.option(
-    "--logs", "log_dir", default="logs", show_default=True, envvar="CTF_LOGS_DIR", show_envvar=True,
-    help="Trace directory (where ctf-solve runs)",
+    "--logs", "log_dir", default=DEFAULT_LOGS_DIR, show_default=True, envvar="CTF_LOGS_DIR", show_envvar=True,
+    help="Trace directory (where ctf-solve writes its traces)",
 )
 @click.option("--run", "run_index", default=1, show_default=True, help="Which run of the challenge: 1 = latest")
 @click.option("--runs", "max_runs", default=3, show_default=True, help="Dashboard: runs shown per challenge")
