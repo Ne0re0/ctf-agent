@@ -195,6 +195,32 @@ def _format_claude_efforts(model: dict[str, Any]) -> str:
     return f" [{rendered}]"
 
 
+def discover_grok_models(command: str) -> list[tuple[str, bool]]:
+    """Models from `grok models`: lines "  - id" or "  * id (default)"."""
+    result = subprocess.run(
+        [resolve_cli(command, "GROK_CLI"), "models"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip()[:300] or f"exit {result.returncode}")
+    models: list[tuple[str, bool]] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped[:2] in ("- ", "* "):
+            model_id = stripped[2:].split()[0]
+            models.append((model_id, stripped.startswith("*")))
+    return models
+
+
+def _format_omp_thinking(model: dict[str, Any]) -> str:
+    """omp reports reasoning support as `reasoning` and optional `thinking` levels."""
+    thinking = model.get("thinking")
+    levels = thinking.get("levels") if isinstance(thinking, dict) else thinking
+    if isinstance(levels, list) and levels:
+        return f" [{', '.join(str(level) for level in levels)}]"
+    return " [thinking]" if model.get("reasoning") else ""
+
+
 def render_available_models(settings: Settings) -> str:
     """Render configured defaults and models available through local provider CLIs."""
     lines = ["Configured defaults:"]
@@ -232,6 +258,31 @@ def render_available_models(settings: Settings) -> str:
             model_id = model.get("model") or model.get("id")
             lines.append(f"  codex/{model_id}{_format_efforts(model)}")
 
+    lines.extend(["", "Grok models available to your grok login:"])
+    try:
+        grok_models = discover_grok_models(settings.grok_cli)
+    except Exception as exc:
+        lines.append(f"  unavailable ({exc})")
+    else:
+        if not grok_models:
+            lines.append("  none advertised")
+        for model_id, is_default in grok_models:
+            lines.append(f"  grok/{model_id}{' (default)' if is_default else ''}")
+
+    lines.extend(["", "omp (oh-my-pi) models available with its logins and keys:"])
+    try:
+        from backend.agents.omp_solver import discover_omp_models
+
+        omp_models = asyncio.run(discover_omp_models(settings.omp_cli))
+    except Exception as exc:
+        lines.append(f"  unavailable ({exc})")
+    else:
+        if not omp_models:
+            lines.append("  none advertised")
+        for model in omp_models:
+            selector = model.get("selector") or f"{model.get('provider')}/{model.get('id')}"
+            lines.append(f"  omp/{selector}{_format_omp_thinking(model)}")
+
     lines.extend(
         [
             "",
@@ -241,6 +292,9 @@ def render_available_models(settings: Settings) -> str:
             "  azure/<model-id>",
             "  zen/<model-id>",
             "  google/<model-id>",
+            "  grok/<model-id>/<effort>   (Grok Build CLI, effort passed to --effort)",
+            "  xai/<model-id>             (xAI API, XAI_API_KEY)",
+            "  omp/<omp-model>/<thinking>  (off, minimal, low, medium, high, xhigh, max)",
             "",
             "Repeat --models to race multiple selections.",
         ]

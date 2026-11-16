@@ -35,12 +35,15 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     opencode_zen_api_key: str = ""
+    xai_api_key: str = ""  # xai/* (xAI API)
 
-    # CLIs behind the claude-sdk/* and codex/* backends: a command on PATH or a path.
+    # CLIs behind the claude-sdk/*, codex/*, grok/* and omp/* backends: a command on PATH or a path.
     # They run with your own login and config, so use whatever command works in
     # your terminal (e.g. a wrapper that sets proxy env vars, not a shell alias).
     claude_cli: str = "claude"
     codex_cli: str = "codex"
+    grok_cli: str = "grok"  # grok/* (Grok Build), uses your grok login / subscription
+    omp_cli: str = "omp"  # omp/* (oh-my-pi), uses omp's own logins and API keys
 
     # Infra
     sandbox_image: str = "ctf-sandbox"
@@ -65,3 +68,17 @@ def resolve_cli(command: str, setting: str) -> str:
             f"to use (environment variable, ./.env or {USER_CONFIG})."
         )
     return path
+
+
+def claude_cli_env() -> dict[str, str]:
+    """Extra environment for the `claude` processes ctf-agent starts.
+
+    CLAUDECODE is cleared so a run started from inside Claude Code is not refused as
+    a nested session. As root, the CLI refuses bypassPermissions unless IS_SANDBOX=1:
+    ctf-agent's PreToolUse hooks already deny every host tool (solver Bash commands
+    are rewritten to run in the Docker sandbox), so it is set there.
+    """
+    env = {"CLAUDECODE": ""}
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        env["IS_SANDBOX"] = "1"
+    return env

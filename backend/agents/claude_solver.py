@@ -25,7 +25,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
-from backend.config import resolve_cli
+from backend.config import claude_cli_env, resolve_cli
 from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
@@ -322,8 +322,8 @@ class ClaudeSolver:
             model=self.model_id,
             system_prompt=system_prompt,
             effort=effort,
-            # Clear CLAUDECODE to prevent nested-session rejection when run from coordinator
-            env={"CLAUDECODE": ""},
+            # CLAUDECODE cleared (nested sessions); IS_SANDBOX=1 as root (bypassPermissions)
+            env=claude_cli_env(),
             allowed_tools=["Bash", "WebFetch", "WebSearch"],
             permission_mode="bypassPermissions",
             output_format={"type": "json_schema", "schema": solver_output_json_schema()},

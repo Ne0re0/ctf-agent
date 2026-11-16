@@ -1,4 +1,4 @@
-"""Model resolution — Bedrock, Azure OpenAI, Zen, Google AI Studio."""
+"""Model resolution — Bedrock, Azure OpenAI, Zen, Google AI Studio, xAI."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.bedrock import BedrockConverseModel, BedrockModelSettings
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.profiles.grok import grok_model_profile
 from pydantic_ai.providers.bedrock import BedrockProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -37,7 +38,12 @@ CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-5.3-codex": 1_000_000,
     "gpt-5.3-codex-spark": 128_000,
     "gemini-3-flash-preview": 1_000_000,
+    "grok-4-1-fast-reasoning": 2_000_000,
+    "grok-code-fast-1": 256_000,
 }
+
+# xAI's OpenAI-compatible endpoint (xai/* specs)
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 # Models that support vision
 VISION_MODELS: set[str] = {
@@ -100,7 +106,15 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                 model_id,
                 provider=GoogleProvider(api_key=settings.gemini_api_key),
             )
-        case "claude-sdk" | "codex":
+        case "xai":
+            if not settings.xai_api_key:
+                raise ValueError(f"{spec}: set XAI_API_KEY to use xai/* models")
+            return OpenAIChatModel(
+                model_id,
+                provider=OpenAIProvider(base_url=XAI_BASE_URL, api_key=settings.xai_api_key),
+                profile=grok_model_profile(model_id),
+            )
+        case "claude-sdk" | "codex" | "omp" | "grok":
             raise ValueError(
                 f"Provider '{provider}' uses its own solver backend, not Pydantic AI. "
                 f"resolve_model() should not be called for {spec}."
@@ -120,8 +134,8 @@ def resolve_model_settings(spec: str) -> ModelSettings:
                 bedrock_cache_tool_definitions=True,
                 bedrock_cache_messages=True,
             )
-        case "azure" | "zen":
-            # Azure/Zen use OpenAI chat completions — server-side prompt caching
+        case "azure" | "zen" | "xai":
+            # Azure/Zen/xAI use OpenAI chat completions — server-side prompt caching
             # is automatic, no explicit config needed. Set max_tokens to avoid
             # reserving the full context window.
             return OpenAIChatModelSettings(
@@ -139,8 +153,23 @@ def resolve_model_settings(spec: str) -> ModelSettings:
             return ModelSettings(max_tokens=128_000)
 
 
+# omp/* specs: omp's own model ids often contain a slash ("anthropic/claude-opus-4-6"),
+# so everything after "omp/" is the model, minus a trailing thinking level.
+OMP_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _omp_parts(spec: str) -> tuple[str, str | None]:
+    """'omp/xai/grok-4/high' -> ('xai/grok-4', 'high')."""
+    rest = spec.split("/")[1:]
+    if len(rest) >= 2 and rest[-1] in OMP_THINKING_LEVELS:
+        return "/".join(rest[:-1]), rest[-1]
+    return "/".join(rest), None
+
+
 def model_id_from_spec(spec: str) -> str:
     """Extract just the model ID from a spec (strips effort suffix)."""
+    if provider_from_spec(spec) == "omp":
+        return _omp_parts(spec)[0]
     parts = spec.split("/")
     return parts[1] if len(parts) >= 2 else spec
 
@@ -151,9 +180,18 @@ def provider_from_spec(spec: str) -> str:
 
 
 def effort_from_spec(spec: str) -> str | None:
-    """Extract effort level from a spec like 'claude-sdk/claude-opus-4-6/max'."""
+    """Extract effort level from a spec like 'claude-sdk/claude-opus-4-6/max'.
+
+    For omp/* specs this is omp's --thinking level (off ... xhigh, max); for grok/*
+    specs, grok's --effort value.
+    """
+    if provider_from_spec(spec) == "omp":
+        return _omp_parts(spec)[1]
     parts = spec.split("/")
-    if len(parts) >= 3 and parts[2] in ("low", "medium", "high", "max"):
+    if provider_from_spec(spec) == "grok":
+        # grok/<model>/<effort>: passed to `grok --effort`, which validates it
+        return parts[2] if len(parts) >= 3 and parts[2] else None
+    if len(parts) >= 3 and parts[2] in ("low", "medium", "high", "xhigh", "max"):
         return parts[2]
     return None
 

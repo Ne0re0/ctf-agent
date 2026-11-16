@@ -137,3 +137,60 @@ exec python3 /opt/cado-nfs/cado-nfs.py "$@"\n' > /usr/local/bin/cado-nfs \
 COPY sandbox/sandbox-tools.txt /tools.txt
 
 WORKDIR /challenge
+
+# ── QEMU (user + system emulation for foreign-architecture binaries) ─────────
+# Run a foreign binary: qemu-<arch> -L /usr/<triplet> ./bin. Each arch gets its base
+# runtime libs in /usr/<triplet>/lib: libc, libstdc++, libgcc_s, libatomic, libgomp.
+# e.g. qemu-arm -L /usr/arm-linux-gnueabihf ./chall ; debug with qemu-<arch> -g 1234.
+# binfmt_misc is set by the host kernel, so call qemu explicitly inside the sandbox.
+RUN apt-get update && apt-get install -y \
+        qemu-user qemu-user-static qemu-system qemu-utils binfmt-support \
+        gdb-multiarch gdbserver patchelf elfutils binutils-multiarch \
+    && cross="" \
+    && for arch in amd64 i386 armhf armel arm64 mips mipsel mips64el powerpc ppc64el \
+                   riscv64 s390x sparc64; do \
+           for lib in libc6 libstdc++6 libgcc-s1 libatomic1 libgomp1; do \
+               apt-cache show "$lib-$arch-cross" >/dev/null 2>&1 && cross="$cross $lib-$arch-cross"; \
+           done; \
+       done \
+    && apt-get install -y $cross \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── pwndbg (portable build: its own multi-arch gdb, Python and pwndbg) ───────
+# `gdb` and `pwndbg` both start pwndbg (pwntools' gdb.attach/gdb.debug too);
+# the stock gdb stays available as /usr/bin/gdb, plain multi-arch as gdb-multiarch.
+ARG PWNDBG_VERSION=2026.10.28
+ENV DEBUGINFOD_URLS=""
+RUN case "$(uname -m)" in \
+        x86_64) arch=x86_64 ;; aarch64) arch=arm64 ;; \
+        *) echo "pwndbg: no portable build for $(uname -m)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/pwndbg/pwndbg/releases/download/${PWNDBG_VERSION}/pwndbg_${PWNDBG_VERSION}_${arch}-portable.tar.xz" \
+       | tar -xJ -C /opt \
+    && ln -sf /opt/pwndbg/bin/pwndbg /usr/local/bin/pwndbg \
+    && ln -sf /opt/pwndbg/bin/pwndbg /usr/local/bin/gdb \
+    && pwndbg --batch -ex "version" >/dev/null
+
+# ── pwninit (patch a binary to its provided libc/ld) ─────────────────────────
+# Release binary is x86_64-only: build it with cargo on other architectures.
+ARG PWNINIT_VERSION=3.3.3
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+        curl -fsSL -o /usr/local/bin/pwninit \
+            "https://github.com/io12/pwninit/releases/download/${PWNINIT_VERSION}/pwninit" \
+        && chmod +x /usr/local/bin/pwninit; \
+    else \
+        apt-get update && apt-get install -y pkg-config libssl-dev liblzma-dev \
+        && rm -rf /var/lib/apt/lists/* \
+        && export RUSTUP_HOME=/tmp/rustup CARGO_HOME=/tmp/cargo \
+        && curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path \
+        && /tmp/cargo/bin/cargo install pwninit --version "${PWNINIT_VERSION}" --locked --root /usr/local \
+        && rm -rf /tmp/rustup /tmp/cargo; \
+    fi \
+    && pwninit --version
+
+# ── Keystone (assembler engine, all architectures) ───────────────────────────
+# No aarch64 wheel: pip builds it from source with cmake on that architecture.
+RUN pip3 install --no-cache-dir keystone-engine \
+    && python3 -c "from keystone import Ks, KS_ARCH_X86, KS_MODE_64; Ks(KS_ARCH_X86, KS_MODE_64).asm('nop')"
+
+WORKDIR /challenge

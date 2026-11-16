@@ -14,15 +14,43 @@ strings            Extract printable strings. strings -n 8 binary
 xxd                Hex dump. xxd file | head, xxd -r to reverse.
 hexdump            Hex dump. hexdump -C file.
 binwalk            Firmware/embedded extraction. binwalk -e file to extract.
-objdump            Disassembly. objdump -d binary (from binutils).
+objdump            Disassembly. objdump -d binary (from binutils). Foreign arch:
+                   objdump -m <arch> or the multi-arch binutils (binutils-multiarch).
 readelf            ELF header info. readelf -a binary.
 nm                 Symbol listing. nm binary.
 
 == DEBUGGERS / TRACING ==
-gdb                GNU debugger. gdb binary, then run, break, info, x/...
+gdb / pwndbg       gdb with pwndbg (multi-arch). gdb ./bin; checksec, vmmap, heap, bins,
+                   telescope, context, cyclic, search. Non-interactive:
+                   gdb -q -batch -ex 'b main' -ex r -ex 'heap' ./bin
+gdb-multiarch      Plain gdb for any arch, without pwndbg.
+gdbserver          Remote debugging target. gdbserver :1234 ./bin
+pwninit            Patch a pwn binary to its given libc/ld: pwninit --bin chall --libc libc.so.6
+                   (fetches ld + debug symbols, writes chall_patched and solve.py).
+patchelf           Set interpreter/rpath by hand. patchelf --set-interpreter ./ld.so ./bin
 ltrace             Library call tracer. ltrace ./binary
 strace             System call tracer. strace ./binary
 radare2            Reverse engineering. r2 binary, then aaa; pdf @main; afl
+
+== EMULATION (foreign architectures) ==
+qemu-<arch>        User-mode: run a foreign Linux binary. Arches: x86_64, i386, arm, aarch64,
+                   mips, mipsel, mips64el, ppc, ppc64le, riscv64, s390x, sparc64...
+                   Dynamic binaries need their libc: qemu-arm -L /usr/arm-linux-gnueabihf ./bin
+                   (base libs - libc, libstdc++, libgcc_s, libatomic, libgomp - in
+                   /usr/<triplet>/lib for: x86_64-linux-gnu, i686-linux-gnu,
+                   arm-linux-gnueabihf, arm-linux-gnueabi, aarch64-linux-gnu, mips-linux-gnu,
+                   mipsel-linux-gnu, mips64el-linux-gnuabi64, powerpc-linux-gnu,
+                   powerpc64le-linux-gnu, riscv64-linux-gnu, s390x-linux-gnu, sparc64-linux-gnu)
+                   or the challenge's own: -L . / patched with pwninit. Other libs (libssl,
+                   zlib...) are not there: use the ones shipped with the challenge.
+                   Static variants: qemu-<arch>-static. binfmt is not set: call qemu explicitly.
+                   Debug: qemu-arm -g 1234 ./bin & then gdb ./bin -ex 'target remote :1234'
+                   pwntools: process(['qemu-arm', '-L', '/usr/arm-linux-gnueabihf', './bin'])
+qemu-system-<arch> Full-system emulation (firmware, kernels): x86_64, i386, arm, aarch64, mips*,
+                   ppc*, riscv64, s390x, sparc*... -nographic -kernel ... ; -s -S for gdb on :1234.
+qemu-img           Disk image conversion/inspection. qemu-img info disk.qcow2
+keystone (python)  Assembler for any arch (x86, ARM, ARM64, MIPS, PPC, SPARC, SystemZ...):
+                   python3 -c "from keystone import *; print(bytes(Ks(KS_ARCH_ARM, KS_MODE_ARM).asm('mov r0, #1')[0]).hex())"
 
 == STEGANOGRAPHY ==
 steghide           Embed/extract in JPEG/BMP/WAV. steghide extract -sf file.jpg

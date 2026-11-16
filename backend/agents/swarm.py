@@ -103,7 +103,9 @@ class ChallengeSwarm:
 
         - claude-sdk/* → ClaudeSolver (Claude Agent SDK, subscription-first)
         - codex/* → CodexSolver (Codex App Server, subscription-first)
-        - bedrock/*, azure/*, zen/*, google/* → Pydantic AI Solver (API)
+        - grok/* → GrokSolver (Grok Build CLI headless, subscription-first)
+        - omp/* → OmpSolver (oh-my-pi RPC mode, omp's own logins and keys)
+        - bedrock/*, azure/*, zen/*, google/*, xai/* → Pydantic AI Solver (API)
         """
         provider = provider_from_spec(model_spec)
 
@@ -126,9 +128,14 @@ class ChallengeSwarm:
                 notify_coordinator=_notify,
             )
 
-        if provider == "codex":
-            from backend.agents.codex_solver import CodexSolver
-            return CodexSolver(
+        if provider in ("codex", "grok", "omp"):
+            if provider == "codex":
+                from backend.agents.codex_solver import CodexSolver as SolverCls
+            elif provider == "grok":
+                from backend.agents.grok_solver import GrokSolver as SolverCls
+            else:
+                from backend.agents.omp_solver import OmpSolver as SolverCls
+            return SolverCls(
                 model_spec=model_spec,
                 challenge_dir=self.challenge_dir,
                 meta=self.meta,

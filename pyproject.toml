@@ -15,11 +15,13 @@ dependencies = [
     "rich",
     "click",
     "markdownify",
+    "textual>=8.2.8",
 ]
 
 [project.scripts]
 ctf-solve = "backend.cli:main"
 ctf-msg = "backend.cli:msg"
+ctf-watch = "backend.watch:main"
 
 [build-system]
 requires = ["hatchling"]
