@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import socket
 import time
 from pathlib import Path
 
@@ -57,4 +58,7 @@ class SolverTracer:
                       "cache_read_tokens": cache_read, "cost_usd": round(cost_usd, 6)})
 
     def event(self, kind: str, **kwargs) -> None:
+        if kind == "start":
+            # lets ctf-watch tell a quiet solver (long thinking) from a killed run
+            kwargs = {"pid": os.getpid(), "host": socket.gethostname(), **kwargs}
         self._write({"type": kind, **kwargs})

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import socket
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,6 +42,16 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 def _sanitize(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # e.g. PermissionError: it exists, under another user
+        return True
+    return True
 
 
 def _middle(path: Path) -> str:
@@ -106,6 +118,7 @@ class Trace:
 
     def summary(self) -> dict:
         steps, cost, flag, status, session, model, last_cmd = 0, 0.0, None, None, None, None, ""
+        alive = None  # is the ctf-solve process still there? None: unknown (old trace, other host)
         for e in self.events:
             kind = e.get("type")
             if kind == "tool_call":
@@ -122,6 +135,8 @@ class Trace:
                 session = e.get("session_id") or e.get("thread_id")
             elif kind == "start":
                 model = e.get("model")
+                if isinstance(e.get("pid"), int) and e.get("host") == socket.gethostname():
+                    alive = _pid_alive(e["pid"])
             elif kind == "stop":
                 status = status or "stopped"
         stopped = any(e.get("type") == "stop" for e in self.events)
@@ -129,7 +144,9 @@ class Trace:
             state = "flag"
         elif stopped:
             state = "stopped"
-        elif time.time() - self.mtime < _ACTIVE_S:
+        elif alive is False:
+            state = "dead"  # ctf-solve is gone and the solver never stopped: killed or crashed
+        elif alive or time.time() - self.mtime < _ACTIVE_S:
             state = "running"
         else:
             state = "idle"  # no stop event and quiet: still thinking, or the run was killed
@@ -174,6 +191,11 @@ def _load_traces(logs: Path, challenge: str | None = None) -> list[Trace]:
         any(t.identify(name) for name in known)
     traces.sort(key=lambda t: (t.challenge, t.started, t.agent))
     return traces
+
+
+def is_live(run: list[Trace]) -> bool:
+    """A run with at least one agent still working."""
+    return any(t.summary()["state"] == "running" for t in run)
 
 
 def _group_runs(traces: list[Trace]) -> dict[str, list[list[Trace]]]:
@@ -388,6 +410,7 @@ _STATE_STYLE = {
     "flag": ("🚩 flag", "bold green"),
     "running": ("● running", "bold cyan"),
     "stopped": ("■ stopped", "bright_black"),
+    "dead": ("✖ killed", "red"),
     "idle": ("◌ quiet", "yellow"),
 }
 
@@ -399,16 +422,17 @@ def _dashboard(logs: Path, challenge: str | None, max_runs: int) -> Group:
     runs = _group_runs(traces)
     if not runs:
         return Group(Text(f"No traces in {logs.resolve()}" + (f" for '{challenge}'" if challenge else ""), style="yellow"))
-    parts: list = []
     order = sorted(runs, key=lambda c: max(t.mtime for run in runs[c] for t in run), reverse=True)
-    for chall in order:
+    columns = (("run", {"style": "dim", "no_wrap": True}), ("agent", {"no_wrap": True}),
+               ("state", {"no_wrap": True}), ("steps", {"justify": "right"}),
+               ("cost", {"justify": "right"}), ("last", {"style": "dim", "no_wrap": True}),
+               ("last command / flag", {"overflow": "ellipsis", "no_wrap": True, "ratio": 1}))
+
+    def panel(chall: str, numbered: list[tuple[int, list[Trace]]], more: int, border: str) -> Panel:
         table = Table(box=None, expand=True, pad_edge=False, show_edge=False, header_style="bold dim")
-        for col, kw in (("run", {"style": "dim", "no_wrap": True}), ("agent", {"no_wrap": True}),
-                        ("state", {"no_wrap": True}), ("steps", {"justify": "right"}),
-                        ("cost", {"justify": "right"}), ("last", {"style": "dim", "no_wrap": True}),
-                        ("last command / flag", {"overflow": "ellipsis", "no_wrap": True, "ratio": 1})):
+        for col, kw in columns:
             table.add_column(col, **kw)
-        for i, run in enumerate(runs[chall][:max_runs]):
+        for pos, (number, run) in enumerate(numbered):
             run_label = datetime.fromtimestamp(run[0].started).strftime("%m-%d %H:%M")
             for j, t in enumerate(run):
                 s = t.summary()
@@ -416,7 +440,7 @@ def _dashboard(logs: Path, challenge: str | None, max_runs: int) -> Group:
                 detail = (Text(f"🚩 {s['flag']}", style="bold green") if s["flag"]
                           else Text(_ANSI_RE.sub("", s["last_cmd"].split("\n")[0])[:200]))
                 table.add_row(
-                    f"#{i + 1} {run_label}" if j == 0 else "",
+                    f"#{number} {run_label}" if j == 0 else "",  # the number --run takes
                     Text(t.agent, style="bold"),
                     Text(state, style=style),
                     str(s["steps"]),
@@ -424,12 +448,33 @@ def _dashboard(logs: Path, challenge: str | None, max_runs: int) -> Group:
                     datetime.fromtimestamp(t.mtime).strftime("%H:%M:%S"),
                     detail,
                 )
-            if i < min(len(runs[chall]), max_runs) - 1:
+            if pos < len(numbered) - 1:
                 table.add_row("", "", "", "", "", "", "")
-        more = len(runs[chall]) - max_runs
-        subtitle = f"[dim]+{more} older run(s): --runs {len(runs[chall])}[/dim]" if more > 0 else None
-        parts.append(Panel(table, title=f"[bold]{escape(chall)}[/bold]", title_align="left",
-                           subtitle=subtitle, subtitle_align="right", border_style="bright_black"))
+        subtitle = f"[dim]+{more} older run(s): --runs {more + len(numbered)}[/dim]" if more > 0 else None
+        return Panel(table, title=f"[bold]{escape(chall)}[/bold]", title_align="left",
+                     subtitle=subtitle, subtitle_align="right", border_style=border)
+
+    live_panels, past_panels, n_running = [], [], 0
+    for chall in order:
+        numbered = list(enumerate(runs[chall], 1))
+        live = [(n, run) for n, run in numbered if is_live(run)]
+        past = [(n, run) for n, run in numbered if not is_live(run)]
+        n_running += sum(t.summary()["state"] == "running" for _, run in live for t in run)
+        if live:
+            live_panels.append(panel(chall, live, 0, "cyan"))
+        if past:
+            past_panels.append(panel(chall, past[:max_runs], len(past) - max_runs, "bright_black"))
+
+    parts: list = []
+    if live_panels:
+        parts.append(Rule(f"[bold cyan]● RUNNING · {n_running} agent{'s' if n_running > 1 else ''}[/bold cyan]",
+                          style="cyan", align="left"))
+        parts.extend(live_panels)
+    else:
+        parts.append(Rule("[dim]○ RUNNING · nothing is running[/dim]", style="bright_black", align="left"))
+    if past_panels:
+        parts.append(Rule("[dim]HISTORY[/dim]", style="bright_black", align="left"))
+        parts.extend(past_panels)
     parts.append(Text("ctf-watch <chall> · all agents live    ctf-watch <chall> <agent> · agent terminal", style="dim"))
     return Group(*parts)
 

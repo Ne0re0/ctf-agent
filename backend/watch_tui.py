@@ -1,6 +1,7 @@
 """Interactive session browser for ctf-watch (Textual).
 
-Left: challenges > runs > agents, with live state, steps and cost.
+Left: running agents on top, apart from the history; in each: challenges > runs > agents,
+with live state, steps and cost.
 Right: the highlighted agent's terminal (commands, outputs, its messages), or the
 whole run interleaved when a run is highlighted. Everything updates while solvers run.
 """
@@ -26,6 +27,7 @@ from backend.watch import (
     _load_traces,
     _render_line,
     _render_terminal,
+    is_live,
     tagged_line,
 )
 
@@ -54,7 +56,9 @@ class SessionBrowser(App):
         super().__init__()
         self.logs = logs
         self.traces: dict[Path, Trace] = {}
-        self.chall_nodes: dict[str, TreeNode] = {}
+        self.sections: dict[str, TreeNode] = {}  # "live" (running) and "past" (history)
+        self.chall_nodes: dict[tuple[str, str], TreeNode] = {}  # (section, challenge)
+        self.run_section: dict[tuple[str, float], str] = {}
         self.run_nodes: dict[tuple[str, float], TreeNode] = {}
         self.agent_nodes: dict[Path, TreeNode] = {}
         self.runs: dict[tuple[str, float], list[Trace]] = {}
@@ -90,6 +94,7 @@ class SessionBrowser(App):
     # ── data / tree ───────────────────────────────────────────────────────
 
     def refresh_tree(self, first: bool = False) -> None:
+        """Sync the tree with the traces: running runs on top, finished ones under History."""
         for t in _load_traces(self.logs):
             if t.path not in self.traces:
                 self.traces[t.path] = t
@@ -97,79 +102,127 @@ class SessionBrowser(App):
             t.read_new()
         grouped = _group_runs(list(self.traces.values()))
         self.runs = {(chall, run[0].started): run for chall, runs in grouped.items() for run in runs}
+        section_of = {key: "live" if is_live(run) else "past" for key, run in self.runs.items()}
 
         tree = self.query_one("#tree", Tree)
-        # A trace is renamed once its start event shows up (its challenge was guessed
-        # from the file name until then): drop the nodes it no longer belongs to.
-        placed = {t.path: ("run", key) for key, run in self.runs.items() for t in run}
-        for path, leaf in list(self.agent_nodes.items()):
-            if leaf.parent is None or leaf.parent.data != placed.get(path):
-                leaf.remove()
-                del self.agent_nodes[path]
+        if not self.sections:
+            self.sections = {name: tree.root.add("", data=("section", name), expand=True) for name in ("live", "past")}
+        cursor = tree.cursor_node.data if tree.cursor_node else None
+
+        # Drop the nodes that are no longer in the right place: a run that finished moves
+        # to History, a trace is renamed once its start event shows up (its challenge was
+        # guessed from the file name until then). They are added again below.
+        placed = {t.path: key for key, run in self.runs.items() for t in run}
         for key, node in list(self.run_nodes.items()):
-            if key not in self.runs:
+            if section_of.get(key) != self.run_section.get(key):
                 node.remove()
                 del self.run_nodes[key]
-        for chall, node in list(self.chall_nodes.items()):
-            if chall not in grouped:
+                self.run_section.pop(key, None)
+        for path, leaf in list(self.agent_nodes.items()):
+            key = placed.get(path)
+            if key not in self.run_nodes or leaf.parent is not self.run_nodes[key]:
+                if key in self.run_nodes or leaf.parent is not None and leaf.parent.data[1] in self.run_nodes:
+                    leaf.remove()
+                del self.agent_nodes[path]
+        used = {(section, key[0]) for key, section in section_of.items()}
+        for ckey, node in list(self.chall_nodes.items()):
+            if ckey not in used:
                 node.remove()
-                del self.chall_nodes[chall]
+                del self.chall_nodes[ckey]
+
+        order = sorted(grouped, key=lambda c: max(t.mtime for run in grouped[c] for t in run), reverse=True)
+        any_live = "live" in section_of.values()
+        for section in ("live", "past"):
+            challs = [c for c in order if (section, c) in used]
+            for chall in challs if first else challs[::-1]:
+                runs = [run for run in grouped[chall] if section_of[(chall, run[0].started)] == section]
+                node = self.chall_nodes.get((section, chall))
+                if node is None:
+                    # running: all unfolded; history: only the latest challenge when nothing runs
+                    unfold = section == "live" or (first and not any_live and chall == order[0])
+                    node = self.sections[section].add("", data=("chall", chall), expand=unfold,
+                                                      before=None if first else 0)
+                    self.chall_nodes[(section, chall)] = node
+                flagged = any(t.summary()["flag"] for run in runs for t in run)
+                label = Text()
+                label.append("🚩 " if flagged else ("● " if section == "live" else "  "),
+                             style="bold green" if flagged else "bold cyan")
+                label.append(chall, style="bold")
+                if section == "past":
+                    label.append(f"  {len(runs)} run{'s' if len(runs) > 1 else ''}", style="dim")
+                node.set_label(label)
+
+                for run in (runs if first or not node.children else runs[::-1]):
+                    key = (chall, run[0].started)
+                    run_node = self.run_nodes.get(key)
+                    if run_node is None:
+                        unfold = section == "live" or (first and not any_live and run is runs[0] and chall == order[0])
+                        run_node = node.add("", data=("run", key), expand=unfold,
+                                            before=None if first or not node.children else 0)
+                        self.run_nodes[key] = run_node
+                        self.run_section[key] = section
+                    states = [t.summary()["state"] for t in run]
+                    started = datetime.fromtimestamp(run[0].started)
+                    run_label = Text(started.strftime("%m-%d %H:%M:%S"), style="bold")
+                    if section == "live":
+                        run_label.append(f"  {states.count('running')}/{len(run)} running", style="cyan")
+                    else:
+                        run_label.append(f"  {len(run)} agent{'s' if len(run) > 1 else ''}", style="dim")
+                    run_node.set_label(run_label)
+                    for i, t in enumerate(run):
+                        if t.color == "white":
+                            t.color = _COLORS[i % len(_COLORS)]
+                        s = t.summary()
+                        icon, style = _STATE_STYLE[s["state"]]
+                        agent_label = Text()
+                        agent_label.append(icon.split(" ")[0] + " ", style=style)
+                        agent_label.append(t.agent, style=f"bold {t.color}")
+                        agent_label.append(f"  {s['steps']}st ${s['cost']:.2f}", style="dim")
+                        leaf = self.agent_nodes.get(t.path)
+                        if leaf is None:
+                            leaf = run_node.add_leaf(agent_label, data=("agent", t.path))
+                            self.agent_nodes[t.path] = leaf
+                        else:
+                            leaf.set_label(agent_label)
+
+        n_running = sum(t.summary()["state"] == "running"
+                        for key, run in self.runs.items() if section_of[key] == "live" for t in run)
+        n_past = sum(section == "past" for section in section_of.values())
+        if n_running:
+            live_label = Text(f"● RUNNING  {n_running} agent{'s' if n_running > 1 else ''}", style="bold cyan")
+        else:
+            live_label = Text("○ RUNNING  nothing is running", style="dim")
+        self.sections["live"].set_label(live_label)
+        self.sections["past"].set_label(Text(f"HISTORY  {n_past} run{'s' if n_past > 1 else ''}", style="bold dim"))
+
+        if first and order:
+            live_keys = [key for key, section in section_of.items() if section == "live"]
+            key = (max(live_keys, key=lambda k: k[1]) if live_keys
+                   else (order[0], grouped[order[0]][0][0].started))
+            if key in self.run_nodes:
+                # once the new nodes are laid out: before that the cursor cannot reach them
+                self.call_after_refresh(tree.move_cursor, self.run_nodes[key])
+        elif cursor and cursor[0] in ("run", "agent"):
+            # keep the cursor on what was selected if its node moved to the other section
+            node = (self.run_nodes if cursor[0] == "run" else self.agent_nodes).get(cursor[1])
+            if node is not None and tree.cursor_node is not node:
+                if node.parent:
+                    node.parent.expand()
+                    if node.parent.parent:
+                        node.parent.parent.expand()
+                tree.move_cursor(node)
         if self.view and self.view[0] == "run" and self.view[1] not in self.runs:
             self.view = None
-        order = sorted(grouped, key=lambda c: max(t.mtime for run in grouped[c] for t in run), reverse=True)
-        for chall in order if first else order[::-1]:
-            runs = grouped[chall]
-            node = self.chall_nodes.get(chall)
-            if node is None:
-                node = tree.root.add("", data=("chall", chall), expand=first and chall == order[0],
-                                     before=None if first else 0)
-                self.chall_nodes[chall] = node
-            flagged = any(t.summary()["flag"] for run in runs for t in run)
-            running = any(t.summary()["state"] == "running" for run in runs for t in run)
-            label = Text()
-            label.append("🚩 " if flagged else ("● " if running else "  "),
-                         style="bold green" if flagged else "bold cyan")
-            label.append(chall, style="bold")
-            label.append(f"  {len(runs)} run{'s' if len(runs) > 1 else ''}", style="dim")
-            node.set_label(label)
-
-            for run in (runs if first or not node.children else runs[::-1]):
-                key = (chall, run[0].started)
-                run_node = self.run_nodes.get(key)
-                if run_node is None:
-                    run_node = node.add("", data=("run", key), expand=first and run is runs[0] and chall == order[0],
-                                        before=None if first or not node.children else 0)
-                    self.run_nodes[key] = run_node
-                started = datetime.fromtimestamp(run[0].started)
-                run_label = Text(started.strftime("%m-%d %H:%M:%S"), style="bold")
-                run_label.append(f"  {len(run)} agent{'s' if len(run) > 1 else ''}", style="dim")
-                run_node.set_label(run_label)
-                for i, t in enumerate(run):
-                    if t.color == "white":
-                        t.color = _COLORS[i % len(_COLORS)]
-                    s = t.summary()
-                    icon, style = _STATE_STYLE[s["state"]]
-                    agent_label = Text()
-                    agent_label.append(icon.split(" ")[0] + " ", style=style)
-                    agent_label.append(t.agent, style=f"bold {t.color}")
-                    agent_label.append(f"  {s['steps']}st ${s['cost']:.2f}", style="dim")
-                    leaf = self.agent_nodes.get(t.path)
-                    if leaf is None:
-                        leaf = run_node.add_leaf(agent_label, data=("agent", t.path))
-                        self.agent_nodes[t.path] = leaf
-                    else:
-                        leaf.set_label(agent_label)
-        if first and order:
-            latest = self.run_nodes.get((order[0], grouped[order[0]][0][0].started))
-            if latest is not None:
-                tree.move_cursor(latest)
         self.update_info()
 
     # ── right pane ────────────────────────────────────────────────────────
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        # a node removed by refresh_tree moves the cursor: only follow where it ends up
+        if event.node is not self.query_one("#tree", Tree).cursor_node:
+            return
         data = event.node.data
-        if not data or data[0] == "chall":
+        if not data or data[0] in ("chall", "section"):
             return
         if data != self.view:
             self.view = data
@@ -273,6 +326,8 @@ class SessionBrowser(App):
         node = self.run_nodes[key]
         if node.parent:
             node.parent.expand()
+            if node.parent.parent:
+                node.parent.parent.expand()
         node.expand()
         tree = self.query_one("#tree", Tree)
         tree.move_cursor(node)

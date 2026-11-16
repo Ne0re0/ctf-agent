@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 
 from backend.watch import _args, _command_text, _group_runs, _load_traces, _result_text, short_agent
 
@@ -65,17 +66,105 @@ def test_browser_merges_renamed_challenge(tmp_path):
         app = SessionBrowser(tmp_path)
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause(0.3)
-            before = list(app.chall_nodes)
+            before = [chall for _, chall in app.chall_nodes]
             _write_trace(tmp_path, name, [{"ts": 1, "type": "start", "challenge": "Plug It In", "model": "m"}])
             app.refresh_tree()
             await pilot.pause(0.3)
             from textual.widgets import Tree
-            shown = [n.data[1] for n in app.query_one(Tree).root.children]
-            return before, list(app.chall_nodes), shown, len(app.agent_nodes)
+            shown = [n.data[1] for section in app.query_one(Tree).root.children for n in section.children]
+            return before, [chall for _, chall in app.chall_nodes], shown, len(app.agent_nodes)
 
     before, after, shown, leaves = asyncio.run(scenario())
     assert before == ["Plug_It_In"]
     assert after == shown == ["Plug It In"] and leaves == 1
+
+
+def _state(tmp_path, name, events):
+    (trace,) = _load_traces(tmp_path, name)
+    trace.path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    os.utime(trace.path, (1, 1))  # quiet for a long time
+    trace.offset, trace.events = 0, []
+    trace.read_new()
+    return trace.summary()["state"]
+
+
+def test_state_follows_the_solver_process(tmp_path):
+    import os
+    import socket
+    import subprocess
+    import sys
+
+    _write_trace(tmp_path, "trace-chall-grok-4.6-20261114-180102.jsonl", [])
+    here = {"type": "start", "challenge": "chall", "model": "m", "host": socket.gethostname()}
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+
+    def state(events):
+        return _state(tmp_path, "chall", events)
+
+    assert state([{**here, "pid": os.getpid()}]) == "running"  # thinking for a long time
+    assert state([{**here, "pid": gone.pid}]) == "dead"  # ctf-solve was killed
+    assert state([{**here, "pid": os.getpid()}, {"type": "stop"}]) == "stopped"
+    assert state([{**here, "pid": gone.pid, "host": "elsewhere"}]) == "idle"  # cannot know
+    assert state([{"type": "start", "challenge": "chall", "model": "m"}]) == "idle"  # trace of an older version
+
+
+def _sections(app):
+    from textual.widgets import Tree
+
+    live, past = app.query_one(Tree).root.children
+    return [[(c.data[1], len(c.children)) for c in section.children] for section in (live, past)]
+
+
+def test_browser_separates_running_agents_from_history(tmp_path):
+    import os
+    import socket
+
+    from backend.watch_tui import SessionBrowser
+
+    start = {"ts": 1, "type": "start", "challenge": "web", "model": "m"}
+    mine = {**start, "pid": os.getpid(), "host": socket.gethostname()}
+    _write_trace(tmp_path, "trace-web-claude-20261114-180102.jsonl", [start, {"ts": 2, "type": "stop"}])
+    _write_trace(tmp_path, "trace-old-claude-20261113-180102.jsonl", [{**start, "challenge": "old"}, {"ts": 2, "type": "stop"}])
+    running = _write_trace(tmp_path, "trace-web-claude-20261116-180102.jsonl", [mine])
+    _write_trace(tmp_path, "trace-web-grok-20261116-180103.jsonl", [mine, {"ts": 2, "type": "stop"}])
+
+    async def scenario():
+        app = SessionBrowser(tmp_path)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause(0.3)
+            during, view = _sections(app), app.view
+            label = str(app.sections["live"].label)
+            with running.open("a") as fh:
+                fh.write(json.dumps({"ts": 3, "type": "stop"}) + "\n")
+            app.refresh_tree()
+            await pilot.pause(0.3)
+            return during, view, label, _sections(app), app.view, str(app.sections["live"].label)
+
+    during, view, label, after, view_after, label_after = asyncio.run(scenario())
+    # the running run (both its agents) is apart from the two finished ones
+    assert during[0] == [("web", 1)] and sorted(during[1]) == [("old", 1), ("web", 1)]
+    assert "1 agent" in label and view == ("run", ("web", view[1][1]))
+    # once its last agent stops it joins the history; the selection follows it
+    assert after[0] == [] and sorted(after[1]) == [("old", 1), ("web", 2)]
+    assert "nothing is running" in label_after and view_after == view
+
+
+def test_dashboard_lists_running_runs_first(tmp_path):
+    import os
+    import socket
+
+    from rich.console import Console
+
+    from backend.watch import _dashboard
+
+    start = {"ts": 1, "type": "start", "challenge": "web", "model": "m"}
+    _write_trace(tmp_path, "trace-web-old-20261114-180102.jsonl", [start, {"ts": 2, "type": "stop"}])
+    _write_trace(tmp_path, "trace-web-new-20261116-180102.jsonl", [{**start, "pid": os.getpid(), "host": socket.gethostname()}])
+    out = Console(width=120, record=True, file=open(os.devnull, "w"))
+    out.print(_dashboard(tmp_path, None, 3))
+    text = out.export_text()
+    assert text.index("RUNNING · 1 agent") < text.index("#1 11-16") < text.index("HISTORY") < text.index("#2 11-14")
 
 
 def test_short_agent():

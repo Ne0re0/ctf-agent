@@ -559,6 +559,12 @@ ctf-watch baby-rsa claude --run 2 --full --no-follow   # an older run, whole out
 ctf-watch --plain               # live dashboard without interaction (e.g. over a pipe)
 ```
 
+Running agents come first, under **RUNNING**, apart from the finished runs under
+**HISTORY** (browser and `--plain` dashboard). A run moves to the history when its last
+agent stops. States: `● running`, `■ stopped`, `🚩 flag`, `✖ killed` (`ctf-solve` died
+without stopping the solver) and `◌ quiet` (silent for 2 minutes, and no way to check the
+process: trace from another machine or an older version).
+
 In the browser, the arrow keys move through the tree: a run shows all its agents
 interleaved, an agent shows its terminal. `t` hides/shows the agents' messages, `o` toggles
 full outputs, `f` stops/resumes following, `g` jumps to the latest run, `q` quits. Traces keep
