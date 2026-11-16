@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Race Claude Sonnet 5.5, Claude Mythos 5.2 and Grok 4.7 fast on one local challenge.
+# Race Claude Sonnet 5.5, Opus 5.5, Opus 5, Mythos 5.2 (all through ourclaude) and Grok 4.7 fast
+# on one local challenge.
 #
 #   ./heazzy.sh <challenge-dir> [extra ctf-solve options...]
 #
@@ -12,13 +13,14 @@
 #   ./heazzy.sh ./dossier --description "..." --connection-info "nc host 1337"
 #                                            # folder without metadata.yml: its files are the distfiles
 #
-# Models can be overridden: CLAUDE_MODEL, MYTHOS_MODEL, GROK_MODEL (full specs);
+# Models can be overridden: CLAUDE_MODEL, OPUS_MODEL, OPUS5_MODEL, MYTHOS_MODEL, GROK_MODEL
+# (full specs); CLAUDE_CLI picks the Claude Code binary for every claude-sdk/* agent (default ourclaude);
 # OMP_MODEL=omp/... adds an omp agent (none by default);
 # set one to an empty string to leave that agent out (e.g. MYTHOS_MODEL= ./heazzy.sh ./chall).
 set -euo pipefail
 
 if [[ $# -lt 1 || "$1" == "-h" || "$1" == "--help" ]]; then
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 fi
 
@@ -29,7 +31,10 @@ if [[ ! -d "$CHALLENGE" ]]; then
   exit 1
 fi
 
+CLAUDE_CLI="${CLAUDE_CLI:-ourclaude}"
 CLAUDE_MODEL="${CLAUDE_MODEL-claude-sdk/claude-sonnet-5-5/medium}"
+OPUS_MODEL="${OPUS_MODEL-claude-sdk/claude-opus-5-5/medium}"
+OPUS5_MODEL="${OPUS5_MODEL-claude-sdk/claude-opus-5/medium}"
 MYTHOS_MODEL="${MYTHOS_MODEL-claude-sdk/claude-mythos-5-2/medium}"
 GROK_MODEL="${GROK_MODEL-grok/grok-4.7-build-fast}"
 OMP_MODEL="${OMP_MODEL-}"
@@ -46,7 +51,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 MODELS=()
-for spec in "$CLAUDE_MODEL" "$MYTHOS_MODEL" "$GROK_MODEL" "$OMP_MODEL"; do
+for spec in "$CLAUDE_MODEL" "$OPUS_MODEL" "$OPUS5_MODEL" "$MYTHOS_MODEL" "$GROK_MODEL" "$OMP_MODEL"; do
   [[ -n "$spec" ]] && MODELS+=(--models "$spec")
 done
 if [[ ${#MODELS[@]} -eq 0 ]]; then
@@ -74,6 +79,7 @@ CHALLENGE="$(cd "$CHALLENGE" && pwd)"
 exec uv run --project "$REPO" ctf-solve \
   --challenge "$CHALLENGE" \
   --image "$IMAGE" \
+  --claude-cli "$CLAUDE_CLI" \
   "${SUBMIT_FLAG[@]}" \
   "${MODELS[@]}" \
   ${EXTRA[@]+"${EXTRA[@]}"}

@@ -280,6 +280,21 @@ Without `--no-submit`, the first accepted flag is verified by CTFd and later sub
 checked locally against that confirmed flag. With `--no-submit`, reported flags cannot be
 verified, just like an ordinary dry run. `--benchmark` currently requires `--challenge`.
 
+## Pulling challenges from any platform
+
+For a platform that is not CTFd, `pull.sh` runs a headless Claude Code agent that finds the
+platform's API and downloads every challenge into `challenges/<slug>/` (`metadata.yml` +
+`distfiles/`). It never submits flags or starts instances.
+
+```bash
+PLATFORM_COOKIE='session=...' ./pull.sh https://ctf.example.com            # once
+PLATFORM_COOKIE='session=...' ./pull.sh https://ctf.example.com --loop 300 # every 5 min
+for d in challenges/*/; do ctf-solve --challenge "$d" --no-submit; done
+```
+
+`PLATFORM_COOKIE` is the `Cookie` header copied from your browser. It goes into a temporary
+curl config, never into the agent's prompt. Already pulled challenges are skipped.
+
 ## Competition mode (CTFd)
 
 ```bash
