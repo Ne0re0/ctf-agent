@@ -71,9 +71,22 @@ class ChallengeMeta:
             description=data.get("description", ""),
             tags=data.get("tags", []),
             connection_info=data.get("connection_info", ""),
-            hints=data.get("hints", []),
+            hints=_normalize_hints(data.get("hints")),
             solves=data.get("solves", 0),
         )
+
+
+def _normalize_hints(raw: Any) -> list[dict[str, Any]]:
+    """Hints as dicts with a `content` key.
+
+    Pulled challenges store {cost, content}; a hand-written metadata.yml usually has
+    plain strings (`hints: [No bruteforce]`) or a single string.
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raw = [raw]
+    return [h if isinstance(h, dict) else {"content": str(h)} for h in raw if h is not None]
 
 
 # Statement files used as description when a challenge folder has no metadata.yml

@@ -53,3 +53,17 @@ def test_coordinator_preload_generates_missing_metadata(tmp_path):
     assert deps.challenge_metas["local-challenge"].description == "Find the flag."
     assert (challenge_dir / "metadata.yml").exists()
     assert not (hidden_dir / "metadata.yml").exists()
+
+
+def test_plain_string_hints_reach_the_prompt(tmp_path):
+    from backend.prompts import build_prompt
+
+    path = tmp_path / "metadata.yml"
+    path.write_text("name: Plug It In\nhints:\n  - No bruteforce\n  - {cost: 0, content: Look at the plugin}\n")
+    meta = ChallengeMeta.from_yaml(path)
+    assert meta.hints == [{"content": "No bruteforce"}, {"cost": 0, "content": "Look at the plugin"}]
+    prompt = build_prompt(meta, [])
+    assert "- No bruteforce" in prompt and "- Look at the plugin" in prompt
+
+    path.write_text("name: x\nhints: No bruteforce\n")
+    assert ChallengeMeta.from_yaml(path).hints == [{"content": "No bruteforce"}]
