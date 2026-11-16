@@ -476,6 +476,7 @@ mkdir -p ~/.config/ctf-agent && cp .env.example ~/.config/ctf-agent/config.env
 | `GROK_CLI` | `grok` | command behind `grok/*` (`--grok-cli`) |
 | `OMP_CLI` | `omp` | command behind `omp/*` (`--omp-cli`) |
 | `CONTAINER_MEMORY_LIMIT` | `16g` | memory cap of each sandbox container |
+| `CTF_LOGS_DIR` | `./logs` | where solvers write traces and `ctf-watch` reads them; environment variable only (not `config.env`), e.g. `export CTF_LOGS_DIR=~/ctf-agent/logs` in your shell rc so every run shares one folder |
 | `AWS_REGION` | `us-east-1` | `bedrock/*` |
 | `AWS_BEARER_TOKEN` | | `bedrock/*` (otherwise your default AWS credentials) |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` | | `azure/*` |

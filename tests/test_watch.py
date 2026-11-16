@@ -73,3 +73,12 @@ def test_browser_shows_agent_terminal(tmp_path):
     assert view[0] == "agent"
     text = "\n".join(lines)
     assert "root@sandbox:/challenge# id" in text and "uid=0(root)" in text and "FLAG{x}" in text
+
+
+def test_tracer_honours_ctf_logs_dir(tmp_path, monkeypatch):
+    from backend.tracing import SolverTracer
+
+    monkeypatch.setenv("CTF_LOGS_DIR", str(tmp_path / "shared-logs"))
+    tracer = SolverTracer("chall", "model")
+    tracer.close()
+    assert tracer.path.startswith(str(tmp_path / "shared-logs"))

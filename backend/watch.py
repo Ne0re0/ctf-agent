@@ -444,7 +444,10 @@ def _follow(traces: list[Trace], render, follow: bool, logs: Path, challenge: st
 @click.command()
 @click.argument("challenge", required=False)
 @click.argument("agent", required=False)
-@click.option("--logs", "log_dir", default="logs", show_default=True, help="Trace directory (where ctf-solve runs)")
+@click.option(
+    "--logs", "log_dir", default="logs", show_default=True, envvar="CTF_LOGS_DIR", show_envvar=True,
+    help="Trace directory (where ctf-solve runs)",
+)
 @click.option("--run", "run_index", default=1, show_default=True, help="Which run of the challenge: 1 = latest")
 @click.option("--runs", "max_runs", default=3, show_default=True, help="Dashboard: runs shown per challenge")
 @click.option("--full", is_flag=True, help="Show whole outputs (as much as the trace kept)")
