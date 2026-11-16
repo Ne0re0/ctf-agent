@@ -42,6 +42,11 @@ def _sanitize(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
 
 
+def _middle(path: Path) -> str:
+    """'<challenge>-<agent>' part of a trace file name (both sanitized)."""
+    return _TS_RE.sub("", path.name).removeprefix("trace-")
+
+
 # ── trace model ───────────────────────────────────────────────────────────────
 
 
@@ -74,7 +79,23 @@ class Trace:
             except ValueError:
                 continue
         self.events.extend(new)
+        for e in new:
+            if e.get("type") == "start" and e.get("challenge"):
+                self.identify(e["challenge"])
         return new
+
+    def identify(self, challenge: str) -> bool:
+        """Adopt the real challenge name if this trace's file name carries it.
+
+        A trace file exists before its start event is written: until then the name is
+        a guess from the (sanitized) file name, e.g. 'Plug_It_In' for 'Plug It In'.
+        """
+        prefix = _sanitize(challenge) + "-"
+        middle = _middle(self.path)
+        if not middle.startswith(prefix):
+            return False
+        self.challenge, self.agent = challenge, middle[len(prefix):] or middle
+        return True
 
     @property
     def mtime(self) -> float:
@@ -119,12 +140,13 @@ class Trace:
 def _load_traces(logs: Path, challenge: str | None = None) -> list[Trace]:
     pattern = f"trace-{_sanitize(challenge)}-*.jsonl" if challenge else "trace-*.jsonl"
     traces = []
+    guessed = []  # no start event yet: challenge name guessed from the file name
     for path in logs.glob(pattern):
         m = _TS_RE.search(path.name)
         if not m:
             continue
         started = datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").timestamp()
-        middle = _TS_RE.sub("", path.name).removeprefix("trace-")
+        middle = _middle(path)
         chall_name = None
         try:
             with path.open() as fh:
@@ -133,7 +155,8 @@ def _load_traces(logs: Path, challenge: str | None = None) -> list[Trace]:
                 chall_name = first.get("challenge")
         except (OSError, ValueError):
             pass
-        if chall_name and middle.startswith(_sanitize(chall_name) + "-"):
+        named = bool(chall_name) and middle.startswith(_sanitize(chall_name) + "-")
+        if named:
             agent = middle[len(_sanitize(chall_name)) + 1:]
         elif challenge:
             chall_name, agent = challenge, middle.removeprefix(_sanitize(challenge) + "-")
@@ -142,6 +165,13 @@ def _load_traces(logs: Path, challenge: str | None = None) -> list[Trace]:
         if challenge and chall_name != challenge and _sanitize(chall_name) != _sanitize(challenge):
             continue
         traces.append(Trace(path, chall_name, agent or middle, started))
+        if not named and not challenge:
+            guessed.append(traces[-1])
+    # Group a trace that has no start event yet with its challenge's other traces
+    # instead of under the sanitized file-name spelling.
+    known = sorted({t.challenge for t in traces if all(t is not g for g in guessed)}, key=len, reverse=True)
+    for t in guessed:
+        any(t.identify(name) for name in known)
     traces.sort(key=lambda t: (t.challenge, t.started, t.agent))
     return traces
 

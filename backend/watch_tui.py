@@ -99,6 +99,23 @@ class SessionBrowser(App):
         self.runs = {(chall, run[0].started): run for chall, runs in grouped.items() for run in runs}
 
         tree = self.query_one("#tree", Tree)
+        # A trace is renamed once its start event shows up (its challenge was guessed
+        # from the file name until then): drop the nodes it no longer belongs to.
+        placed = {t.path: ("run", key) for key, run in self.runs.items() for t in run}
+        for path, leaf in list(self.agent_nodes.items()):
+            if leaf.parent is None or leaf.parent.data != placed.get(path):
+                leaf.remove()
+                del self.agent_nodes[path]
+        for key, node in list(self.run_nodes.items()):
+            if key not in self.runs:
+                node.remove()
+                del self.run_nodes[key]
+        for chall, node in list(self.chall_nodes.items()):
+            if chall not in grouped:
+                node.remove()
+                del self.chall_nodes[chall]
+        if self.view and self.view[0] == "run" and self.view[1] not in self.runs:
+            self.view = None
         order = sorted(grouped, key=lambda c: max(t.mtime for run in grouped[c] for t in run), reverse=True)
         for chall in order if first else order[::-1]:
             runs = grouped[chall]

@@ -37,6 +37,47 @@ def test_traces_group_into_runs_per_challenge(tmp_path):
     assert {t.agent for t in runs["baby-rsa"][1]} == {"grok-grok-4.6", "claude-opus-5"}
 
 
+def test_trace_without_start_event_joins_its_challenge(tmp_path):
+    """A just-created (still empty) trace must not show up as a second 'Plug_It_In' challenge."""
+    start = {"type": "start", "challenge": "Plug It In", "model": "m"}
+    _write_trace(tmp_path, "trace-Plug_It_In-claude-opus-5-5-max-20261116-191238.jsonl", [start])
+    empty = _write_trace(tmp_path, "trace-Plug_It_In-claude-sonnet-4-6-max-20261116-191239.jsonl", [])
+    runs = _group_runs(_load_traces(tmp_path))
+    assert list(runs) == ["Plug It In"]
+    assert {t.agent for t in runs["Plug It In"][0]} == {"claude-opus-5-5-max", "claude-sonnet-4-6-max"}
+
+    # alone, the name can only be guessed; it is corrected when the start event arrives
+    (tmp_path / "trace-Plug_It_In-claude-opus-5-5-max-20261116-191238.jsonl").unlink()
+    (trace,) = _load_traces(tmp_path)
+    assert trace.challenge == "Plug_It_In"
+    empty.write_text(json.dumps(start) + "\n")
+    trace.read_new()
+    assert (trace.challenge, trace.agent) == ("Plug It In", "claude-sonnet-4-6-max")
+
+
+def test_browser_merges_renamed_challenge(tmp_path):
+    from backend.watch_tui import SessionBrowser
+
+    name = "trace-Plug_It_In-claude-opus-5-5-max-20261116-191238.jsonl"
+    _write_trace(tmp_path, name, [])
+
+    async def scenario():
+        app = SessionBrowser(tmp_path)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause(0.3)
+            before = list(app.chall_nodes)
+            _write_trace(tmp_path, name, [{"ts": 1, "type": "start", "challenge": "Plug It In", "model": "m"}])
+            app.refresh_tree()
+            await pilot.pause(0.3)
+            from textual.widgets import Tree
+            shown = [n.data[1] for n in app.query_one(Tree).root.children]
+            return before, list(app.chall_nodes), shown, len(app.agent_nodes)
+
+    before, after, shown, leaves = asyncio.run(scenario())
+    assert before == ["Plug_It_In"]
+    assert after == shown == ["Plug It In"] and leaves == 1
+
+
 def test_short_agent():
     assert short_agent("grok-4.6") == "grok-4.6"
     assert len(short_agent("omp-orcarouter_deepseek_deepseek-v4.1-flash")) == 18
