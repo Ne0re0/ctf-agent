@@ -7,11 +7,17 @@ import json
 import os
 import re
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 from backend.config import Settings, resolve_cli
 from backend.models import DEFAULT_MODELS
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
 
 
 def _claude_help(command: str) -> str:
@@ -100,6 +106,61 @@ def discover_claude_versioned_models(
         ]
 
     raise RuntimeError(f"no model catalog found under {cache_dir}")
+
+
+def discover_claude_gateway_models(
+    config_dir: Path | None = None,
+    *,
+    live: bool = True,
+) -> list[dict[str, Any]]:
+    """Return live OurClaude models, falling back to Claude Code's gateway cache."""
+    if config_dir is None:
+        configured_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        config_dir = Path(configured_dir).expanduser() if configured_dir else Path.home() / ".claude"
+
+    proxy_path = config_dir / "proxy.json"
+    cache_path = config_dir / "cache" / "gateway-models.json"
+    try:
+        proxy = json.loads(proxy_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("OurClaude proxy configuration is unavailable") from exc
+
+    server_url = proxy.get("server_url")
+    token = proxy.get("token")
+    if not isinstance(server_url, str) or not server_url.startswith(("https://", "http://")):
+        raise RuntimeError("OurClaude proxy URL is invalid")
+    gateway_url = server_url.rstrip("/") + "/proxy"
+
+    if live and isinstance(token, str) and token:
+        request = urllib.request.Request(
+            gateway_url + "/v1/models?limit=1000",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "claude-code/2.1.325",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        try:
+            opener = urllib.request.build_opener(_NoRedirect())
+            with opener.open(request, timeout=5) as response:
+                payload = json.load(response)
+            models = payload.get("data")
+            if isinstance(models, list):
+                return [model for model in models if isinstance(model, dict) and isinstance(model.get("id"), str)]
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("OurClaude gateway model cache is unavailable") from exc
+    if cached.get("baseUrl") != gateway_url:
+        raise RuntimeError("gateway model cache does not match the configured OurClaude server")
+
+    models = cached.get("models")
+    if not isinstance(models, list):
+        raise RuntimeError("OurClaude gateway model cache has no model list")
+    return [model for model in models if isinstance(model, dict) and isinstance(model.get("id"), str)]
 
 
 async def _codex_rpc(
@@ -210,6 +271,7 @@ def render_available_models(settings: Settings) -> str:
         lines.extend(f"  claude-sdk/{alias}{effort_text}" for alias in aliases)
 
     lines.extend(["", "Versioned Claude models in the local Claude Code catalog:"])
+    claude_models: list[dict[str, Any]] = []
     try:
         claude_models = discover_claude_versioned_models()
     except Exception as exc:
@@ -219,6 +281,24 @@ def render_available_models(settings: Settings) -> str:
             lines.append("  none advertised")
         for model in claude_models:
             lines.append(f"  claude-sdk/{model['id']}{_format_claude_efforts(model)}")
+
+    try:
+        is_ourclaude = Path(resolve_cli(settings.claude_cli, "CLAUDE_CLI")).name == "ourclaude"
+    except RuntimeError:
+        is_ourclaude = False
+    if is_ourclaude:
+        lines.extend(["", "OurClaude gateway models:"])
+        try:
+            gateway_models = discover_claude_gateway_models()
+        except Exception as exc:
+            lines.append(f"  unavailable ({exc})")
+        else:
+            if not gateway_models:
+                lines.append("  none advertised")
+            local_ids = {model["id"] for model in claude_models}
+            for model in gateway_models:
+                if model["id"] not in local_ids:
+                    lines.append(f"  claude-sdk/{model['id']}")
 
     lines.extend(["", "Codex models available to this account:"])
     try:

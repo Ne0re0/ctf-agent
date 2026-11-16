@@ -148,8 +148,8 @@ repo without the links, use `uv run ctf-solve`.
 ctf-solve --models
 ```
 
-This prints the default solver lineup, the Claude models your `claude` CLI and local Claude
-Code catalog advertise, and the Codex models your account can use. A section that says
+This prints the default solver lineup, the Claude models your configured CLI and local Claude
+Code catalog advertise, gateway models when `CLAUDE_CLI=ourclaude`, and the Codex models your account can use. A section that says
 `unavailable (...)` means that CLI isn't installed, isn't on `PATH`, or couldn't be queried.
 
 ## Solving a local challenge
@@ -336,7 +336,7 @@ ctf-solve --models
 ```
 
 `--models` without a value prints the configured defaults, the Claude aliases advertised by
-your `claude` CLI, the versioned models in your local Claude Code catalog, and the Codex models
+your configured Claude CLI, the versioned models in your local Claude Code catalog, OurClaude gateway models when configured, and the Codex models
 available to your account, with the effort levels each one supports.
 
 ### Per run
@@ -429,6 +429,14 @@ Shell aliases are invisible to programs: if `claude` is an alias for a wrapper
 (e.g. one that sets `ANTHROPIC_BASE_URL`), set `CLAUDE_CLI` to that wrapper. A
 one-off override is `--claude-cli` / `--codex-cli`. The resolved commands are
 printed at startup, and a command that can't be found stops the run with the setting to fix.
+
+For OurClaude, set `CLAUDE_CLI=ourclaude` and update the installed wrapper with
+`sudo ourclaude update`. The Claude SDK solver and coordinator then inherit the
+wrapper's proxy settings. `ctf-solve --models` queries the proxy's current model
+list and falls back to Claude Code's gateway cache if the request fails. The
+proxy advertises Mythos only when an account in your pool is assigned to that
+version. An assignment does not guarantee that the upstream account is free of
+rate limits.
 
 ## Command reference
 
