@@ -11,7 +11,7 @@
 # PLATFORM_HEADERS: optional extra header, e.g. 'Authorization: Bearer ...'.
 # PULL_MODEL (default claude-sonnet-5-5), PULL_EFFORT (default low).
 #
-# Then: ./heazzy.sh challenges/<slug>   (or ctf-solve --challenge challenges/<slug> --no-submit)
+# Then: ctf-solve --challenge challenges/<slug> --no-submit
 set -euo pipefail
 
 if [[ $# -lt 1 || "$1" == "-h" || "$1" == "--help" ]]; then

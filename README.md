@@ -116,6 +116,8 @@ If `docker` only works with `sudo`, add yourself to the `docker` group and log i
 sudo usermod -aG docker "$USER"
 ```
 
+The group change only applies to new sessions: log out and back in (or run `newgrp docker`).
+
 ### 4. Log in to Claude Code and/or Codex
 
 ```bash
@@ -134,6 +136,10 @@ logins, settings and proxies as your terminal. No API key is needed.
 (`~/.omp/agent/models.yml`, its logins, or provider API keys in your environment). If `claude` is a shell
 alias or a wrapper on your machine, see [Claude and Codex commands](#claude-and-codex-commands).
 
+With a wrapper such as `ourclaude` (installing it logs the default `claude` CLI out), set
+`CLAUDE_CLI=/usr/local/bin/ourclaude` in `~/.config/ctf-agent/config.env`. To remove it:
+`rm /usr/local/bin/ourclaude ~/.claude/proxy.json`.
+
 ### 5. (Optional) Run `ctf-solve` from any directory
 
 Link the venv's commands into a directory on your `PATH`:
@@ -142,6 +148,7 @@ Link the venv's commands into a directory on your `PATH`:
 mkdir -p ~/.local/bin
 ln -s "$PWD/.venv/bin/ctf-solve" ~/.local/bin/ctf-solve
 ln -s "$PWD/.venv/bin/ctf-msg" ~/.local/bin/ctf-msg
+ln -s "$PWD/.venv/bin/ctf-watch" ~/.local/bin/ctf-watch
 ```
 
 Then put your settings in `~/.config/ctf-agent/config.env` (see [Configuration](#configuration))
@@ -476,8 +483,9 @@ mkdir -p ~/.config/ctf-agent && cp .env.example ~/.config/ctf-agent/config.env
 | `GEMINI_API_KEY` | | `google/*` |
 | `XAI_API_KEY` | | `xai/*` (also read by `grok`/`omp` themselves when they use an xAI key) |
 
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env.example` are not read by ctf-agent itself:
-the `claude` and `codex` CLIs use their own logins (and see your shell environment as usual).
+Every line of `.env.example` is commented out: uncomment only what you use, since a placeholder
+left active (e.g. `CTFD_TOKEN`) would be used for real. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
+are not read by ctf-agent: the `claude` and `codex` CLIs use their own logins.
 The sandbox image and concurrency are set with `--image` and `--max-challenges`.
 
 ### Claude and Codex commands
