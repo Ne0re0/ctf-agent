@@ -230,8 +230,9 @@ ctf-solve --challenge ./crackme-folder --no-submit --description "Find the passw
 ctf-solve --challenge ./my-chall --no-submit
 ```
 
-- **`--no-submit`** (dry run) needs no CTFd. The first flag any solver reports is accepted
-  **without verification** and stops the other solvers, so check it yourself.
+- **`--no-submit`** (dry run) needs no CTFd. The first flag a solver passes to
+  `submit_flag` stops the other solvers. It is **unverified**, so check it yourself.
+  A flag stated only in a final answer remains a finding and does not end the run.
 - **Without `--no-submit`**, flags are submitted to CTFd (`CTFD_URL` with `CTFD_TOKEN`, or
   `CTFD_USER`/`CTFD_PASS`) under the challenge's `name`, and a solver only wins when CTFd
   accepts its flag. Use this for a challenge pulled from a live CTFd (see below).
@@ -392,7 +393,7 @@ runs it in the challenge's container.
   tools, which the extension `backend/agents/omp_bridge.ts` registers. Extensions, skills,
   rules and LSP of your omp setup are not loaded.
 
-With these two backends, only a `submit_flag` call counts as finding the flag (in
+For every backend, only a `submit_flag` call counts as finding the flag (in
 `--no-submit` too); a flag the model merely states in its answer is kept as a finding.
 Costs are the ones each CLI reports: omp reports $0 for models without prices in its
 catalog (e.g. a custom `models.yml` entry).

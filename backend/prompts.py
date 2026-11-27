@@ -233,11 +233,11 @@ def build_prompt(
     if has_named_tools:
         image_hint = "**Images: call `view_image` FIRST, before any other analysis.**"
         web_hint = "Web: fuzz params, check JS source, cookies, robots.txt. For XSS/SSRF: use `webhook_create`."
-        submit_hint = "**Verify every candidate with `submit_flag`** before reporting."
+        submit_hint = "**Call `submit_flag` with a flag read from the target before reporting.**"
     else:
         image_hint = "**Images: use `exiftool`, `steghide`, `zsteg`, `strings`, `xxd` via bash.**"
         web_hint = "Web: fuzz params, check JS source, cookies, robots.txt. For XSS/SSRF: use `curl` to webhook.site."
-        submit_hint = "**Verify every candidate with `submit_flag '<flag>'`** (bash command) before reporting."
+        submit_hint = "**Call `submit_flag '<flag>'` with a flag read from the target before reporting.**"
 
     lines += [
         "",
@@ -257,7 +257,9 @@ def build_prompt(
         "   - Pwn: `stty raw -echo` before launching vulnerable binaries over nc.",
         '4. **Ignore placeholder flags** — `CTF{flag}`, `CTF{placeholder}` are not real flags.',
         f"5. {submit_hint}",
-        "6. Once CORRECT: output `FLAG: <value>` on its own line.",
+        "   If the challenge names a flag file or location, read that exact source. A discovered credential is not the flag.",
+        "   In --no-submit mode, submit_flag records an unverified candidate; it cannot prove correctness.",
+        "6. Once submit_flag accepts the flag (or records it in --no-submit): output `FLAG: <value>` on its own line.",
         "7. Do not guess. Do not ask. Cover maximum surface area.",
     ]
 

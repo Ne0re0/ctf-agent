@@ -152,7 +152,7 @@ class CTFdClient:
             return SubmitResult("correct", message, f'CORRECT — "{flag}" accepted. {message}'.strip())
         if status == "already_solved":
             return SubmitResult(
-                "already_solved", message, f'ALREADY SOLVED — "{flag}" accepted. {message}'.strip()
+                "already_solved", message, f'ALREADY SOLVED — cannot verify "{flag}". {message}'.strip()
             )
         if status == "incorrect":
             return SubmitResult(

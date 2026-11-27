@@ -3,6 +3,7 @@
 from pydantic_ai import RunContext
 
 from backend.deps import SolverDeps
+from backend.output_types import is_placeholder_flag
 from backend.tools.core import do_submit_flag
 
 
@@ -13,7 +14,11 @@ async def submit_flag(ctx: RunContext[SolverDeps], flag: str) -> str:
     Do NOT submit placeholder flags like CTF{flag} or CTF{placeholder}.
     """
     if ctx.deps.no_submit:
-        return f'DRY RUN — would submit "{flag.strip()}" but --no-submit is set.'
+        flag = flag.strip()
+        if is_placeholder_flag(flag):
+            return f'"{flag}" is not a flag. Submit only the real flag, read from the target.'
+        ctx.deps.confirmed_flag = flag
+        return f'DRY RUN — would submit "{flag}" but --no-submit is set.'
 
     # Use deduped submission via swarm if available, otherwise direct CTFd call
     if ctx.deps.submit_fn:

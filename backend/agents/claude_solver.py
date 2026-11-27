@@ -420,10 +420,12 @@ class ClaudeSolver:
 
                     output = getattr(message, "structured_output", None)
                     if flag := reported_flag(output):
-                        self._flag = flag
-                        self._findings = f"Flag found via {output.get('method', '?')}: {self._flag}"
-                        if self.no_submit:
-                            self._confirmed = True
+                        if not self._confirmed:
+                            method = output.get("method", "?") if isinstance(output, dict) else "?"
+                            self._findings = (
+                                f"Reported flag (not submitted): {flag} "
+                                f"via {method}"
+                            )
                     elif isinstance(output, dict) and not self._confirmed:
                         # "NOT_FOUND" as the flag: not a solve, the swarm relaunches this solver
                         self.tracer.event("no_flag", reported=str(output.get("flag", ""))[:200])

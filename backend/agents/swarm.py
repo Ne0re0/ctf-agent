@@ -200,8 +200,8 @@ class ChallengeSwarm:
             normalized = flag.strip()
 
             if self.confirmed_flag:
-                if self.benchmark and normalized != self.confirmed_flag:
-                    return "INCORRECT — does not match the confirmed benchmark flag.", False
+                if normalized != self.confirmed_flag:
+                    return "INCORRECT — does not match the confirmed flag.", False
                 return f"ALREADY SOLVED — flag already confirmed: {self.confirmed_flag}", True
 
             # Normal races deduplicate globally. Benchmarks keep attempts independent.

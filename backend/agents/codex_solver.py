@@ -26,6 +26,7 @@ from backend.ctfd import CTFdClient
 from backend.loop_detect import LoopDetector
 from backend.models import model_id_from_spec, supports_vision
 from backend.output_types import (
+    is_placeholder_flag,
     reported_flag,
     solver_output_json_schema,
     writeup_output_json_schema,
@@ -145,8 +146,14 @@ async def exec_sandbox_tool(solver: Any, name: str, args: dict) -> str | tuple[b
     elif name == "list_files":
         return await do_list_files(solver.sandbox, args.get("path", "/challenge/distfiles"))
     elif name == "submit_flag":
-        flag = args.get("flag", "")
+        flag = str(args.get("flag", "")).strip()
         if solver.no_submit:
+            if is_placeholder_flag(flag):
+                return f'"{flag}" is not a flag. Submit only the real flag, read from the target.'
+            solver._confirmed = True
+            solver._flag = flag
+            solver._findings = f"Flag found via submit_flag: {flag}"
+            solver.tracer.event("flag_confirmed", flag=flag, dry_run=True)
             return f'DRY RUN — would submit "{flag}"'
         if solver.submit_fn:
             display, is_confirmed = await solver.submit_fn(flag)
@@ -410,15 +417,14 @@ class CodexSolver:
                 # Proactive compaction at 70% context window (only for small-context models like spark)
                 context_window = token_usage.get("modelContextWindow")
                 total_tokens = total.get("totalTokens", 0)
-                if context_window and context_window < 200_000 and total_tokens > context_window * 0.7:
-                    if not self._compact_requested:
-                        self._compact_requested = True
-                        logger.info(f"[{self.agent_name}] Requesting compaction ({total_tokens}/{context_window} tokens)")
-                        try:
-                            await self._rpc("thread/compact/start", {"threadId": self._thread_id})
-                            self.tracer.event("compact_requested", tokens=total_tokens, window=context_window)
-                        except Exception as e:
-                            logger.warning(f"[{self.agent_name}] Compaction request failed: {e}")
+                if context_window and context_window < 200_000 and total_tokens > context_window * 0.7 and not self._compact_requested:
+                    self._compact_requested = True
+                    logger.info(f"[{self.agent_name}] Requesting compaction ({total_tokens}/{context_window} tokens)")
+                    try:
+                        await self._rpc("thread/compact/start", {"threadId": self._thread_id})
+                        self.tracer.event("compact_requested", tokens=total_tokens, window=context_window)
+                    except Exception as e:
+                        logger.warning(f"[{self.agent_name}] Compaction request failed: {e}")
 
                 self.cost_tracker.record_tokens(
                     self.agent_name, self.model_id,
@@ -535,10 +541,11 @@ class CodexSolver:
 
             if self._structured_output:
                 if flag := reported_flag(self._structured_output):
-                    self._flag = flag
-                    self._findings = f"Flag found via {self._structured_output.get('method', '?')}: {self._flag}"
-                    if self.no_submit:
-                        self._confirmed = True
+                    if not self._confirmed:
+                        self._findings = (
+                            f"Reported flag (not submitted): {flag} "
+                            f"via {self._structured_output.get('method', '?')}"
+                        )
                 elif not self._confirmed and self._structured_output.get("method"):
                     # "NOT_FOUND" as the flag: not a solve, the swarm relaunches this solver
                     self._findings = str(self._structured_output["method"])[:2000]

@@ -28,7 +28,7 @@ from backend.models import (
 from backend.output_types import FlagFound
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
-from backend.solver_base import CANCELLED, CORRECT_MARKERS, ERROR, FLAG_FOUND, GAVE_UP, SolverResult
+from backend.solver_base import CANCELLED, ERROR, FLAG_FOUND, GAVE_UP, SolverResult
 from backend.tools.flag import submit_flag
 from backend.tools.sandbox import (
     bash,
@@ -81,7 +81,11 @@ class TracingToolset(WrapperToolset[SolverDeps]):
             result = f"{result}\n\n{LOOP_WARNING_MESSAGE}" if isinstance(result, str) else result
 
         # Check for confirmed flag
-        if name == "submit_flag" and any(m in result_str for m in CORRECT_MARKERS):
+        if (
+            name == "submit_flag"
+            and ctx.deps.confirmed_flag
+            and str(tool_args.get("flag", "")).strip() == ctx.deps.confirmed_flag
+        ):
             self.tracer.event("flag_confirmed", tool=name, step=step)
 
         if step % 5 == 0 and ctx.deps.message_bus and isinstance(result, str):
@@ -200,7 +204,6 @@ class Solver:
         assert self._agent is not None
 
         t0 = time.monotonic()
-        steps_before = self._step_count[0]
 
         try:
             from pydantic_ai.usage import UsageLimits
@@ -243,16 +246,12 @@ class Solver:
                     )
 
             output = result.output
-            if isinstance(output, FlagFound):
-                self._flag = output.flag
-                self._findings = f"Flag found via {output.method}: {output.flag}"
-                # In dry-run mode, structured output is sufficient (can't verify via CTFd)
-                if self.deps.no_submit:
-                    self._confirmed = True
+            if isinstance(output, FlagFound) and not self.deps.confirmed_flag:
+                self._findings = f"Reported flag (not submitted): {output.flag} via {output.method}"
             # CTFd confirmation always counts (the primary path when not in dry-run)
             if self.deps.confirmed_flag:
                 self._confirmed = True
-                self._flag = self._flag or self.deps.confirmed_flag
+                self._flag = self.deps.confirmed_flag
 
             if self._confirmed and self._flag:
                 return self._result(FLAG_FOUND)
