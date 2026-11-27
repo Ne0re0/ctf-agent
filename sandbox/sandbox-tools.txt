@@ -20,6 +20,7 @@ kerbrute           Kerberos user enumeration. kerbrute userenum --dc host -d dom
 ldapsearch         LDAP queries. ldapsearch -x -H ldap://host -b 'dc=example,dc=com'.
 evil-winrm         WinRM shell. evil-winrm -i host -u user -p pass.
 bloodhound-python  Collect AD data for BloodHound. bloodhound-python -h for options.
+bloodyAD           Active Directory privilege changes and enumeration. bloodyAD --help.
 
 == BINARY ANALYSIS ==
 file               Identify file type. file binary
