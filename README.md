@@ -110,6 +110,10 @@ docker build -f sandbox/Dockerfile.sandbox -t ctf-sandbox .
 The image is large (SageMath, angr, PyTorch...), so the first build takes a while. Solvers use
 `ctf-sandbox` by default; pass `--image NAME` to use another tag.
 
+Each sandbox has a separate virtual clock. Inside it, `date -u -s '2001-02-03 04:05:06'`
+changes the time seen by dynamically linked programs without changing the host clock.
+`LD_PRELOAD= date -u` shows the real time. The virtual clock resets with the sandbox.
+
 If `docker` only works with `sudo`, add yourself to the `docker` group and log in again:
 
 ```bash
